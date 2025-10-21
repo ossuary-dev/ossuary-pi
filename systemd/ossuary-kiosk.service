@@ -1,7 +1,8 @@
 [Unit]
 Description=Ossuary Kiosk Browser
-After=ossuary-api.service graphical.target
-Wants=graphical.target
+After=ossuary-api.service graphical.target network-online.target
+Wants=graphical.target network-online.target
+Requisite=graphical.target
 
 [Service]
 Type=exec
@@ -15,6 +16,7 @@ StandardError=journal
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=/home/ossuary/.Xauthority
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/ossuary/src
 
 # Allow access to X display and audio
 SupplementaryGroups=audio video input

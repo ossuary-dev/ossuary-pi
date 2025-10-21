@@ -1,5 +1,5 @@
 #!/bin/bash
-"""Ossuary Service Control Script."""
+# Ossuary Service Control Script
 
 # Service management script for Ossuary Pi
 

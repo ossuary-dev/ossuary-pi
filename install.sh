@@ -45,6 +45,8 @@ REQUIRED_PACKAGES=(
     "python3-gi-cairo"
     "libcairo2-dev"
     "libgirepository1.0-dev"
+    "xinit"
+    "xserver-xorg-legacy"
 )
 
 print_banner() {
@@ -558,6 +560,18 @@ exec openbox-session
 EOF
         chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.xinitrc"
         chmod +x "$OSSUARY_HOME/.xinitrc"
+
+        # Set up automatic X11 startup in .bashrc
+        if [[ ! -f "$OSSUARY_HOME/.bashrc" ]] || ! grep -q "startx" "$OSSUARY_HOME/.bashrc"; then
+            cat >> "$OSSUARY_HOME/.bashrc" << 'EOF'
+
+# Auto-start X11 on login to tty1
+if [[ -z $DISPLAY && $(tty) = /dev/tty1 ]]; then
+    startx
+fi
+EOF
+            chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.bashrc"
+        fi
     elif [[ ! -d "$OSSUARY_HOME" ]]; then
         print_warning "User home directory $OSSUARY_HOME does not exist"
     fi
