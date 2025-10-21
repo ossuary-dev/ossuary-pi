@@ -22,7 +22,7 @@ BIN_DIR="/usr/local/bin"
 
 # Version and repository
 OSSUARY_VERSION="1.0.0"
-REPO_URL="https://github.com/yourusername/ossuary-pi.git"
+REPO_URL="https://github.com/ossuary-dev/ossuary-pi.git"
 
 # System requirements
 MIN_PYTHON_VERSION="3.9"
