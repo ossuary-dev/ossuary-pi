@@ -1,0 +1,23 @@
+[Unit]
+Description=Ossuary Kiosk Browser
+After=ossuary-api.service graphical.target
+Wants=graphical.target
+
+[Service]
+Type=exec
+User=ossuary
+Group=ossuary
+ExecStart=/opt/ossuary/bin/ossuary-kiosk
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/ossuary/.Xauthority
+Environment=PYTHONUNBUFFERED=1
+
+# Allow access to X display and audio
+SupplementaryGroups=audio video input
+
+[Install]
+WantedBy=graphical.target

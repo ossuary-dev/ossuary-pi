@@ -1,0 +1,54 @@
+{
+  "system": {
+    "hostname": "ossuary",
+    "timezone": "UTC",
+    "log_level": "INFO"
+  },
+  "network": {
+    "ap_ssid": "ossuary-setup",
+    "ap_passphrase": null,
+    "ap_channel": 6,
+    "ap_ip": "192.168.42.1",
+    "ap_subnet": "192.168.42.0/24",
+    "connection_timeout": 30,
+    "fallback_timeout": 300,
+    "scan_interval": 10
+  },
+  "kiosk": {
+    "url": "",
+    "default_url": "http://ossuary.local",
+    "refresh_interval": 0,
+    "enable_webgl": true,
+    "enable_webgpu": false,
+    "disable_screensaver": true,
+    "hide_cursor": true,
+    "autostart_delay": 5
+  },
+  "portal": {
+    "bind_address": "0.0.0.0",
+    "bind_port": 80,
+    "ssl_port": 443,
+    "ssl_enabled": false,
+    "ssl_cert_path": "/etc/ossuary/ssl/cert.pem",
+    "ssl_key_path": "/etc/ossuary/ssl/key.pem",
+    "title": "Ossuary Setup",
+    "theme": "dark"
+  },
+  "api": {
+    "enabled": true,
+    "bind_address": "127.0.0.1",
+    "bind_port": 8080,
+    "auth_required": false,
+    "auth_token": "",
+    "cors_enabled": true,
+    "rate_limit": {
+      "enabled": false,
+      "requests_per_minute": 60
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "auto_load": true,
+    "plugin_dir": "/opt/ossuary/plugins"
+  }
+}

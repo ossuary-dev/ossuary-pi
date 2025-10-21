@@ -1,0 +1,172 @@
+version: '2.1'
+
+services:
+  # Main Ossuary Pi application
+  ossuary-pi:
+    build: .
+    container_name: ossuary-pi
+    restart: unless-stopped
+
+    # Network configuration
+    network_mode: host
+
+    # Privileged access needed for:
+    # - NetworkManager D-Bus access
+    # - WiFi interface management
+    # - X11 display access
+    privileged: true
+
+    # Device access
+    devices:
+      - "/dev/dri:/dev/dri"  # GPU access for hardware acceleration
+
+    # Volume mounts
+    volumes:
+      # System integration
+      - "/var/run/dbus:/host/run/dbus"
+      - "/sys/fs/cgroup:/sys/fs/cgroup:ro"
+
+      # Configuration persistence
+      - "ossuary-config:/etc/ossuary"
+      - "ossuary-data:/var/lib/ossuary"
+      - "ossuary-logs:/var/log/ossuary"
+
+      # X11 and display
+      - "/tmp/.X11-unix:/tmp/.X11-unix:rw"
+      - "/dev/shm:/dev/shm"
+
+      # Network configuration
+      - "network-manager:/etc/NetworkManager"
+
+    # Environment variables
+    environment:
+      # Display configuration
+      - DISPLAY=:0
+      - XAUTHORITY=/tmp/.X11-unix
+
+      # D-Bus configuration
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
+
+      # Balena features
+      - UDEV=1
+
+      # Application configuration
+      - OSSUARY_CONFIG_PATH=/etc/ossuary/config.json
+      - OSSUARY_LOG_LEVEL=INFO
+      - PYTHONUNBUFFERED=1
+
+    # Balena-specific labels
+    labels:
+      - "io.balena.features.dbus=1"
+      - "io.balena.features.supervisor-api=1"
+      - "io.balena.features.balena-api=1"
+      - "io.balena.features.kernel-modules=1"
+
+    # Port mappings (when not using host networking)
+    ports:
+      - "80:80"     # HTTP portal
+      - "443:443"   # HTTPS portal
+      - "8080:8080" # API
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Resource limits (adjust based on Pi model)
+    mem_limit: 512m
+    memswap_limit: 1g
+
+    # Dependencies
+    depends_on:
+      - ossuary-db
+
+  # Optional: Separate database service
+  ossuary-db:
+    image: alpine:latest
+    container_name: ossuary-db
+    restart: unless-stopped
+
+    volumes:
+      - "ossuary-db:/var/lib/sqlite"
+
+    # Just a data container for SQLite
+    command: tail -f /dev/null
+
+    # Resource limits
+    mem_limit: 64m
+
+  # Optional: Monitoring service
+  ossuary-monitor:
+    image: balenalib/raspberrypi4-64-debian:bookworm
+    container_name: ossuary-monitor
+    restart: unless-stopped
+
+    volumes:
+      - "ossuary-logs:/var/log/ossuary:ro"
+
+    environment:
+      - MONITOR_INTERVAL=60
+
+    # Simple monitoring script
+    command: >
+      sh -c "
+        while true; do
+          echo \"[MONITOR] \$(date): Checking services...\"
+          if ! curl -f http://ossuary-pi/health >/dev/null 2>&1; then
+            echo \"[MONITOR] \$(date): Health check failed\"
+          else
+            echo \"[MONITOR] \$(date): All services healthy\"
+          fi
+          sleep \$${MONITOR_INTERVAL}
+        done
+      "
+
+    # Resource limits
+    mem_limit: 32m
+
+    depends_on:
+      - ossuary-pi
+
+# Named volumes for data persistence
+volumes:
+  ossuary-config:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/ossuary/config
+
+  ossuary-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/ossuary/data
+
+  ossuary-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/ossuary/logs
+
+  ossuary-db:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/ossuary/db
+
+  network-manager:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /data/ossuary/network

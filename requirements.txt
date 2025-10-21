@@ -1,0 +1,40 @@
+# Core framework dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.4.0
+python-multipart>=0.0.6
+
+# NetworkManager integration
+PyGObject>=3.44.0
+pygobject-stubs>=2.10.0
+
+# System integration
+psutil>=5.9.0
+watchdog>=3.0.0
+
+# Database
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+
+# HTTP client
+aiohttp>=3.8.0
+httpx>=0.25.0
+
+# Configuration and validation
+pydantic-settings>=2.0.0
+jsonschema>=4.19.0
+
+# Logging and monitoring
+structlog>=23.1.0
+prometheus-client>=0.17.0
+
+# Utilities
+click>=8.1.0
+jinja2>=3.1.0
+qrcode[pil]>=7.4.0
+
+# Development dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.7.0
+mypy>=1.5.0

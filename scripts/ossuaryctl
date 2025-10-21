@@ -1,0 +1,325 @@
+#!/bin/bash
+"""Ossuary Service Control Script."""
+
+# Service management script for Ossuary Pi
+
+set -e
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Services in dependency order
+SERVICES=(
+    "ossuary-config"
+    "ossuary-netd"
+    "ossuary-api"
+    "ossuary-portal"
+    "ossuary-kiosk"
+)
+
+print_banner() {
+    echo -e "${BLUE}"
+    echo "  ╔═══════════════════════════════════════╗"
+    echo "  ║            Ossuary Pi                 ║"
+    echo "  ║     Service Control Manager           ║"
+    echo "  ╚═══════════════════════════════════════╝"
+    echo -e "${NC}"
+}
+
+print_usage() {
+    echo "Usage: $0 {start|stop|restart|status|logs|enable|disable|reload}"
+    echo ""
+    echo "Commands:"
+    echo "  start     Start all Ossuary services"
+    echo "  stop      Stop all Ossuary services"
+    echo "  restart   Restart all Ossuary services"
+    echo "  status    Show status of all services"
+    echo "  logs      Show recent logs from all services"
+    echo "  enable    Enable all services to start at boot"
+    echo "  disable   Disable services from starting at boot"
+    echo "  reload    Reload systemd configuration"
+    echo ""
+    echo "Service-specific commands:"
+    echo "  $0 {service} {start|stop|restart|status|logs}"
+    echo ""
+    echo "Available services: ${SERVICES[*]}"
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}Error: This script must be run as root${NC}"
+        exit 1
+    fi
+}
+
+service_exists() {
+    local service=$1
+    systemctl list-unit-files "${service}.service" &>/dev/null
+}
+
+print_service_status() {
+    local service=$1
+    if service_exists "$service"; then
+        local status=$(systemctl is-active "$service")
+        local enabled=$(systemctl is-enabled "$service")
+
+        case $status in
+            "active")
+                echo -e "  ${GREEN}●${NC} $service: ${GREEN}$status${NC} (${enabled})"
+                ;;
+            "inactive"|"failed")
+                echo -e "  ${RED}●${NC} $service: ${RED}$status${NC} (${enabled})"
+                ;;
+            *)
+                echo -e "  ${YELLOW}●${NC} $service: ${YELLOW}$status${NC} (${enabled})"
+                ;;
+        esac
+    else
+        echo -e "  ${RED}●${NC} $service: ${RED}not found${NC}"
+    fi
+}
+
+start_services() {
+    echo -e "${BLUE}Starting Ossuary services...${NC}"
+
+    for service in "${SERVICES[@]}"; do
+        if service_exists "$service"; then
+            echo -n "Starting $service... "
+            if systemctl start "$service"; then
+                echo -e "${GREEN}OK${NC}"
+            else
+                echo -e "${RED}FAILED${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Warning: $service service not found${NC}"
+        fi
+    done
+
+    echo -e "${GREEN}Service startup completed${NC}"
+}
+
+stop_services() {
+    echo -e "${BLUE}Stopping Ossuary services...${NC}"
+
+    # Stop in reverse order
+    for ((i=${#SERVICES[@]}-1; i>=0; i--)); do
+        service="${SERVICES[i]}"
+        if service_exists "$service"; then
+            echo -n "Stopping $service... "
+            if systemctl stop "$service"; then
+                echo -e "${GREEN}OK${NC}"
+            else
+                echo -e "${RED}FAILED${NC}"
+            fi
+        fi
+    done
+
+    echo -e "${GREEN}Service shutdown completed${NC}"
+}
+
+restart_services() {
+    echo -e "${BLUE}Restarting Ossuary services...${NC}"
+    stop_services
+    sleep 2
+    start_services
+}
+
+show_status() {
+    echo -e "${BLUE}Ossuary Service Status:${NC}"
+    echo ""
+
+    for service in "${SERVICES[@]}"; do
+        print_service_status "$service"
+    done
+
+    echo ""
+    echo -e "${BLUE}System Information:${NC}"
+    echo "  Hostname: $(hostname)"
+    echo "  Uptime: $(uptime -p)"
+    echo "  Load: $(uptime | awk -F'load average:' '{print $2}')"
+
+    # Network info
+    if command -v ip &> /dev/null; then
+        local ip=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7}' | head -n1)
+        if [[ -n "$ip" ]]; then
+            echo "  IP Address: $ip"
+        fi
+    fi
+}
+
+show_logs() {
+    local service=$1
+    local lines=${2:-50}
+
+    if [[ -n "$service" ]]; then
+        if service_exists "$service"; then
+            echo -e "${BLUE}Recent logs for $service:${NC}"
+            journalctl -u "$service" -n "$lines" --no-pager
+        else
+            echo -e "${RED}Service $service not found${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${BLUE}Recent logs for all Ossuary services:${NC}"
+        for service in "${SERVICES[@]}"; do
+            if service_exists "$service"; then
+                echo -e "\n${YELLOW}=== $service ===${NC}"
+                journalctl -u "$service" -n 10 --no-pager | tail -n 10
+            fi
+        done
+    fi
+}
+
+enable_services() {
+    echo -e "${BLUE}Enabling Ossuary services...${NC}"
+
+    for service in "${SERVICES[@]}"; do
+        if service_exists "$service"; then
+            echo -n "Enabling $service... "
+            if systemctl enable "$service"; then
+                echo -e "${GREEN}OK${NC}"
+            else
+                echo -e "${RED}FAILED${NC}"
+            fi
+        else
+            echo -e "${YELLOW}Warning: $service service not found${NC}"
+        fi
+    done
+
+    echo -e "${GREEN}Services enabled for startup${NC}"
+}
+
+disable_services() {
+    echo -e "${BLUE}Disabling Ossuary services...${NC}"
+
+    for service in "${SERVICES[@]}"; do
+        if service_exists "$service"; then
+            echo -n "Disabling $service... "
+            if systemctl disable "$service"; then
+                echo -e "${GREEN}OK${NC}"
+            else
+                echo -e "${RED}FAILED${NC}"
+            fi
+        fi
+    done
+
+    echo -e "${GREEN}Services disabled from startup${NC}"
+}
+
+reload_systemd() {
+    echo -e "${BLUE}Reloading systemd configuration...${NC}"
+    systemctl daemon-reload
+    echo -e "${GREEN}Systemd configuration reloaded${NC}"
+}
+
+# Service-specific operations
+service_operation() {
+    local service=$1
+    local operation=$2
+
+    if ! service_exists "$service"; then
+        echo -e "${RED}Error: Service $service not found${NC}"
+        exit 1
+    fi
+
+    case $operation in
+        "start")
+            echo "Starting $service..."
+            systemctl start "$service"
+            ;;
+        "stop")
+            echo "Stopping $service..."
+            systemctl stop "$service"
+            ;;
+        "restart")
+            echo "Restarting $service..."
+            systemctl restart "$service"
+            ;;
+        "status")
+            print_service_status "$service"
+            systemctl status "$service" --no-pager
+            ;;
+        "logs")
+            show_logs "$service" 100
+            ;;
+        *)
+            echo -e "${RED}Error: Unknown operation $operation${NC}"
+            print_usage
+            exit 1
+            ;;
+    esac
+}
+
+# Main script logic
+main() {
+    print_banner
+
+    if [[ $# -eq 0 ]]; then
+        print_usage
+        exit 1
+    fi
+
+    local command=$1
+
+    # Check if first argument is a service name
+    for service in "${SERVICES[@]}"; do
+        if [[ "$command" == "$service" ]]; then
+            if [[ $# -ne 2 ]]; then
+                echo -e "${RED}Error: Service operation required${NC}"
+                echo "Usage: $0 $service {start|stop|restart|status|logs}"
+                exit 1
+            fi
+            service_operation "$command" "$2"
+            exit 0
+        fi
+    done
+
+    # Global commands
+    case $command in
+        "start")
+            check_root
+            start_services
+            ;;
+        "stop")
+            check_root
+            stop_services
+            ;;
+        "restart")
+            check_root
+            restart_services
+            ;;
+        "status")
+            show_status
+            ;;
+        "logs")
+            show_logs
+            ;;
+        "enable")
+            check_root
+            enable_services
+            ;;
+        "disable")
+            check_root
+            disable_services
+            ;;
+        "reload")
+            check_root
+            reload_systemd
+            ;;
+        "help"|"-h"|"--help")
+            print_usage
+            ;;
+        *)
+            echo -e "${RED}Error: Unknown command $command${NC}"
+            print_usage
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function
+main "$@"

@@ -1,0 +1,18 @@
+[Unit]
+Description=Ossuary Portal Server
+After=ossuary-api.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=ossuary
+Group=ossuary
+ExecStart=/opt/ossuary/bin/ossuary-portal
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

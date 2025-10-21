@@ -1,0 +1,23 @@
+[Unit]
+Description=Ossuary Network Manager
+After=ossuary-config.service network-online.target
+Wants=network-online.target
+Before=ossuary-api.service
+
+[Service]
+Type=exec
+User=root
+Group=root
+ExecStart=/opt/ossuary/bin/ossuary-netd
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+# Network management capabilities
+PrivateNetwork=false
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE
+
+[Install]
+WantedBy=multi-user.target

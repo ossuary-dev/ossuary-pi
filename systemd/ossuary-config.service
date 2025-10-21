@@ -1,0 +1,19 @@
+[Unit]
+Description=Ossuary Configuration Manager
+After=local-fs.target
+Before=ossuary-netd.service
+Wants=local-fs.target
+
+[Service]
+Type=exec
+User=root
+Group=root
+ExecStart=/opt/ossuary/bin/ossuary-config
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
