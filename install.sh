@@ -442,29 +442,32 @@ install_ossuary() {
     print_step "Installing Python dependencies..."
     cd "$INSTALL_DIR"
 
-    # Handle Debian-managed typing-extensions conflicts
-    if pip3 show typing-extensions 2>/dev/null | grep -q "Installed-files.*debian"; then
-        print_step "Detected Debian-managed typing-extensions, using --force-reinstall"
-        if python3 -m pip install --break-system-packages --force-reinstall -r requirements.txt; then
-            print_success "Python dependencies installed with force-reinstall"
-        else
-            print_error "Failed to install Python dependencies with force-reinstall"
+    # Use virtual environment for safe Python package management
+    print_step "Creating Python virtual environment for safe package isolation..."
+
+    local venv_path="/opt/ossuary/venv"
+    if [[ ! -d "$venv_path" ]]; then
+        if ! python3 -m venv --system-site-packages "$venv_path"; then
+            print_error "Failed to create virtual environment"
             exit 1
         fi
-    else
-        # Try normal installation first
-        if python3 -m pip install --break-system-packages -r requirements.txt; then
-            print_success "Python dependencies installed"
-        else
-            print_warning "Normal install failed, trying with --force-reinstall"
-            if python3 -m pip install --break-system-packages --force-reinstall -r requirements.txt; then
-                print_success "Python dependencies installed with force-reinstall"
-            else
-                print_error "Failed to install Python dependencies"
-                exit 1
-            fi
-        fi
     fi
+
+    # Install packages in virtual environment
+    print_step "Installing Python dependencies in virtual environment..."
+    if ! "$venv_path/bin/pip" install -r requirements.txt; then
+        print_error "Failed to install Python dependencies in virtual environment"
+        exit 1
+    fi
+
+    # Update service scripts to use virtual environment
+    for script in "$INSTALL_DIR/bin/"*; do
+        if [[ -f "$script" ]] && head -1 "$script" | grep -q "python3"; then
+            sed -i "1s|.*|#!$venv_path/bin/python|" "$script"
+        fi
+    done
+
+    print_success "Python dependencies installed safely in virtual environment"
 
     print_success "Ossuary Pi files installed"
 }
