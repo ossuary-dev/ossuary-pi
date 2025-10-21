@@ -118,8 +118,16 @@ check_hardware() {
     local mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     local mem_mb=$((mem_kb / 1024))
 
-    if [[ $mem_mb -lt 512 ]]; then
-        print_warning "System has less than 512MB RAM. Performance may be limited."
+    if [[ $mem_mb -lt 1024 ]]; then
+        print_warning "System has less than 1GB RAM ($mem_mb MB). Performance may be limited."
+        if [[ $mem_mb -lt 512 ]]; then
+            print_error "System has less than 512MB RAM. Installation may fail."
+            read -p "Continue anyway? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+        fi
     else
         print_success "Memory check passed ($mem_mb MB)"
     fi
@@ -174,14 +182,32 @@ install_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
-    # Install packages
+    # Install packages with retry logic
     for package in "${REQUIRED_PACKAGES[@]}"; do
         echo -n "Installing $package... "
-        if apt-get install -y "$package" &>/dev/null; then
-            echo -e "${GREEN}OK${NC}"
-        else
+        local attempts=0
+        local max_attempts=3
+        local success=false
+
+        while [[ $attempts -lt $max_attempts ]]; do
+            if apt-get install -y "$package" 2>/dev/null; then
+                echo -e "${GREEN}OK${NC}"
+                success=true
+                break
+            else
+                ((attempts++))
+                if [[ $attempts -lt $max_attempts ]]; then
+                    echo -n "retry $attempts... "
+                    sleep 2
+                fi
+            fi
+        done
+
+        if [[ $success == false ]]; then
             echo -e "${RED}FAILED${NC}"
-            print_error "Failed to install $package"
+            print_error "Failed to install $package after $max_attempts attempts"
+            print_error "Last error:"
+            apt-get install -y "$package"
             exit 1
         fi
     done
@@ -254,15 +280,19 @@ create_directories() {
     done
 
     # Set proper ownership and permissions
-    chown -R root:root "$INSTALL_DIR"
-    chown -R root:root "$CONFIG_DIR"
-    chown -R "$OSSUARY_USER:$OSSUARY_USER" "$DATA_DIR"
-    chown -R "$OSSUARY_USER:$OSSUARY_USER" "$LOG_DIR"
+    if id "$OSSUARY_USER" &>/dev/null; then
+        chown -R root:root "$INSTALL_DIR" || print_warning "Failed to set ownership for $INSTALL_DIR"
+        chown -R root:root "$CONFIG_DIR" || print_warning "Failed to set ownership for $CONFIG_DIR"
+        chown -R "$OSSUARY_USER:$OSSUARY_USER" "$DATA_DIR" || print_warning "Failed to set ownership for $DATA_DIR"
+        chown -R "$OSSUARY_USER:$OSSUARY_USER" "$LOG_DIR" || print_warning "Failed to set ownership for $LOG_DIR"
+    else
+        print_warning "User $OSSUARY_USER does not exist, skipping ownership changes"
+    fi
 
-    chmod 755 "$INSTALL_DIR"
-    chmod 755 "$CONFIG_DIR"
-    chmod 755 "$DATA_DIR"
-    chmod 755 "$LOG_DIR"
+    chmod 755 "$INSTALL_DIR" || print_warning "Failed to set permissions for $INSTALL_DIR"
+    chmod 755 "$CONFIG_DIR" || print_warning "Failed to set permissions for $CONFIG_DIR"
+    chmod 755 "$DATA_DIR" || print_warning "Failed to set permissions for $DATA_DIR"
+    chmod 755 "$LOG_DIR" || print_warning "Failed to set permissions for $LOG_DIR"
 
     print_success "Directory structure created"
 }
@@ -286,15 +316,40 @@ install_ossuary() {
         fi
     fi
 
-    # Copy source files
-    cp -r "$source_dir/src/"* "$INSTALL_DIR/src/"
-    cp -r "$source_dir/web/"* "$INSTALL_DIR/web/"
-    cp -r "$source_dir/config/"* "$CONFIG_DIR/"
-    cp -r "$source_dir/systemd/"* "/etc/systemd/system/"
-    cp -r "$source_dir/scripts/bin/"* "$INSTALL_DIR/bin/"
-    cp "$source_dir/scripts/ossuaryctl" "$BIN_DIR/"
-    cp "$source_dir/scripts/monitor.sh" "$INSTALL_DIR/"
-    cp "$source_dir/requirements.txt" "$INSTALL_DIR/"
+    # Copy source files with error checking
+    print_step "Copying source files..."
+
+    if [[ -d "$source_dir/src" ]]; then
+        cp -r "$source_dir/src/"* "$INSTALL_DIR/src/" || { print_error "Failed to copy src files"; exit 1; }
+    fi
+
+    if [[ -d "$source_dir/web" ]]; then
+        cp -r "$source_dir/web/"* "$INSTALL_DIR/web/" || { print_error "Failed to copy web files"; exit 1; }
+    fi
+
+    if [[ -d "$source_dir/config" ]]; then
+        cp -r "$source_dir/config/"* "$CONFIG_DIR/" || { print_error "Failed to copy config files"; exit 1; }
+    fi
+
+    if [[ -d "$source_dir/systemd" ]]; then
+        cp -r "$source_dir/systemd/"* "/etc/systemd/system/" || { print_error "Failed to copy systemd files"; exit 1; }
+    fi
+
+    if [[ -d "$source_dir/scripts/bin" ]]; then
+        cp -r "$source_dir/scripts/bin/"* "$INSTALL_DIR/bin/" || { print_error "Failed to copy bin files"; exit 1; }
+    fi
+
+    if [[ -f "$source_dir/scripts/ossuaryctl" ]]; then
+        cp "$source_dir/scripts/ossuaryctl" "$BIN_DIR/" || { print_error "Failed to copy ossuaryctl"; exit 1; }
+    fi
+
+    if [[ -f "$source_dir/scripts/monitor.sh" ]]; then
+        cp "$source_dir/scripts/monitor.sh" "$INSTALL_DIR/" || { print_error "Failed to copy monitor.sh"; exit 1; }
+    fi
+
+    if [[ -f "$source_dir/requirements.txt" ]]; then
+        cp "$source_dir/requirements.txt" "$INSTALL_DIR/" || { print_error "Failed to copy requirements.txt"; exit 1; }
+    fi
 
     # Set proper permissions
     chmod +x "$INSTALL_DIR/bin/"*
@@ -304,6 +359,9 @@ install_ossuary() {
     # Install Python dependencies
     print_step "Installing Python dependencies..."
     cd "$INSTALL_DIR"
+
+    # Clean up any conflicting packages first
+    python3 -m pip uninstall --break-system-packages -y typing-extensions || true
 
     if python3 -m pip install --break-system-packages -r requirements.txt; then
         print_success "Python dependencies installed"
@@ -361,7 +419,7 @@ ExecStart=-/sbin/agetty --autologin $OSSUARY_USER --noclear %I \$TERM
 EOF
 
     # Configure X11 for ossuary user
-    if [[ ! -f "$OSSUARY_HOME/.xinitrc" ]]; then
+    if [[ -d "$OSSUARY_HOME" ]] && [[ ! -f "$OSSUARY_HOME/.xinitrc" ]]; then
         cat > "$OSSUARY_HOME/.xinitrc" << 'EOF'
 #!/bin/bash
 # Disable screensaver and power management
@@ -377,10 +435,12 @@ exec openbox-session
 EOF
         chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.xinitrc"
         chmod +x "$OSSUARY_HOME/.xinitrc"
+    elif [[ ! -d "$OSSUARY_HOME" ]]; then
+        print_warning "User home directory $OSSUARY_HOME does not exist"
     fi
 
     # Enable GPU memory split for Pi
-    if [[ -f /boot/config.txt ]] || [[ -f /boot/firmware/config.txt ]]; then
+    if [[ -f /boot/firmware/config.txt ]] || [[ -f /boot/config.txt ]]; then
         local config_file
         if [[ -f /boot/firmware/config.txt ]]; then
             config_file="/boot/firmware/config.txt"
@@ -408,17 +468,33 @@ configure_services() {
 
     # Enable Ossuary services
     local services=("ossuary-config" "ossuary-netd" "ossuary-api" "ossuary-portal" "ossuary-kiosk")
+    local failed_services=()
 
     for service in "${services[@]}"; do
-        if systemctl enable "$service"; then
-            echo "Enabled $service"
+        if [[ -f "/etc/systemd/system/${service}.service" ]]; then
+            if systemctl enable "$service"; then
+                echo "Enabled $service"
+            else
+                print_warning "Failed to enable $service"
+                failed_services+=("$service")
+            fi
         else
-            print_warning "Failed to enable $service"
+            print_warning "Service file for $service not found"
+            failed_services+=("$service")
         fi
     done
 
+    if [[ ${#failed_services[@]} -gt 0 ]]; then
+        print_warning "Some services failed to enable: ${failed_services[*]}"
+    fi
+
     # Set up monitoring cron job
-    (crontab -l 2>/dev/null || true; echo "*/5 * * * * $INSTALL_DIR/monitor.sh") | crontab -
+    print_step "Setting up monitoring cron job..."
+    if crontab -l 2>/dev/null | grep -q "monitor.sh"; then
+        print_warning "Monitor cron job already exists"
+    else
+        (crontab -l 2>/dev/null || true; echo "*/5 * * * * $INSTALL_DIR/monitor.sh") | crontab - || print_warning "Failed to set up cron job"
+    fi
 
     print_success "Services configured"
 }
@@ -459,12 +535,18 @@ create_default_config() {
 
     # Copy default configuration if it doesn't exist
     if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
-        cp "$CONFIG_DIR/default.json" "$CONFIG_DIR/config.json"
+        if [[ -f "$CONFIG_DIR/default.json" ]]; then
+            cp "$CONFIG_DIR/default.json" "$CONFIG_DIR/config.json" || print_warning "Failed to copy default config"
+        else
+            print_warning "Default config file not found at $CONFIG_DIR/default.json"
+        fi
     fi
 
     # Set proper ownership
-    chown root:root "$CONFIG_DIR/config.json"
-    chmod 644 "$CONFIG_DIR/config.json"
+    if [[ -f "$CONFIG_DIR/config.json" ]]; then
+        chown root:root "$CONFIG_DIR/config.json" || print_warning "Failed to set config ownership"
+        chmod 644 "$CONFIG_DIR/config.json" || print_warning "Failed to set config permissions"
+    fi
 
     print_success "Default configuration created"
 }
