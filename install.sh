@@ -302,6 +302,7 @@ create_user() {
     fi
 
     # Set up sudo access for specific commands
+    mkdir -p "/etc/sudoers.d"
     cat > "/etc/sudoers.d/ossuary" << 'EOF'
 # Allow ossuary user to manage system services and network
 ossuary ALL=(ALL) NOPASSWD: /bin/systemctl restart ossuary-*
@@ -422,6 +423,7 @@ install_ossuary() {
     fi
 
     if [[ -f "$source_dir/scripts/ossuaryctl" ]]; then
+        mkdir -p "$BIN_DIR"
         cp "$source_dir/scripts/ossuaryctl" "$BIN_DIR/" || { print_error "Failed to copy ossuaryctl"; exit 1; }
     fi
 
@@ -477,10 +479,25 @@ configure_network_manager() {
 
     # Enable NetworkManager and disable conflicting services
     systemctl enable NetworkManager
-    systemctl disable dhcpcd || true
-    systemctl stop wpa_supplicant || true
+
+    # Disable dhcpcd only if it exists
+    if systemctl is-enabled dhcpcd &>/dev/null; then
+        systemctl disable dhcpcd
+        print_step "Disabled dhcpcd service"
+    else
+        print_step "dhcpcd service not present (normal on current Pi OS)"
+    fi
+
+    # Stop wpa_supplicant only if it's running
+    if systemctl is-active wpa_supplicant &>/dev/null; then
+        systemctl stop wpa_supplicant
+        print_step "Stopped wpa_supplicant service"
+    else
+        print_step "wpa_supplicant not running"
+    fi
 
     # Configure NetworkManager
+    mkdir -p "/etc/NetworkManager"
     cat > "/etc/NetworkManager/NetworkManager.conf" << 'EOF'
 [main]
 plugins=ifupdown,keyfile
@@ -494,6 +511,7 @@ wifi.scan-rand-mac-address=no
 EOF
 
     # Allow ossuary user to manage network connections
+    mkdir -p "/etc/polkit-1/localauthority/50-local.d"
     cat > "/etc/polkit-1/localauthority/50-local.d/ossuary-networkmanager.pkla" << 'EOF'
 [Allow ossuary user to control NetworkManager]
 Identity=unix-user:ossuary
