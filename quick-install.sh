@@ -11,8 +11,8 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-REPO_URL="https://github.com/yourusername/ossuary-pi"
-INSTALLER_URL="https://raw.githubusercontent.com/yourusername/ossuary-pi/main/install.sh"
+REPO_URL="https://github.com/ossuary-dev/ossuary-pi"
+INSTALLER_URL="https://raw.githubusercontent.com/ossuary-dev/ossuary-pi/main/install.sh"
 TEMP_DIR="/tmp/ossuary-pi-installer"
 
 print_banner() {
