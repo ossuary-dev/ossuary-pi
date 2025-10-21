@@ -187,7 +187,7 @@ install_packages() {
     done
 
     # Install Python packages globally needed for system integration
-    if ! pip3 install PyGObject pygobject-stubs; then
+    if ! pip3 install --break-system-packages PyGObject pygobject-stubs; then
         print_warning "Failed to install system Python packages"
     fi
 
@@ -305,7 +305,7 @@ install_ossuary() {
     print_step "Installing Python dependencies..."
     cd "$INSTALL_DIR"
 
-    if python3 -m pip install -r requirements.txt; then
+    if python3 -m pip install --break-system-packages -r requirements.txt; then
         print_success "Python dependencies installed"
     else
         print_error "Failed to install Python dependencies"
