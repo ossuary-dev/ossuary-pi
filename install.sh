@@ -41,6 +41,10 @@ REQUIRED_PACKAGES=(
     "sqlite3"
     "hostapd"
     "dnsmasq"
+    "python3-gi"
+    "python3-gi-cairo"
+    "libcairo2-dev"
+    "libgirepository1.0-dev"
 )
 
 print_banner() {
@@ -261,10 +265,8 @@ install_packages() {
         fi
     done
 
-    # Install Python packages globally needed for system integration
-    if ! pip3 install --break-system-packages PyGObject pygobject-stubs; then
-        print_warning "Failed to install system Python packages"
-    fi
+    # Python GI packages are now installed via apt, no additional pip packages needed
+    print_success "System Python GI packages installed via apt"
 
     print_success "All packages installed successfully"
 }

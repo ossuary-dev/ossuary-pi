@@ -8,9 +8,9 @@ python-multipart>=0.0.6
 # Modern python-sdbus NetworkManager bindings (preferred)
 sdbus-networkmanager>=2.0.0
 
-# Legacy fallback (deprecated but may be needed on older systems)
-PyGObject>=3.44.0
-pygobject-stubs>=2.10.0
+# Legacy fallback (PyGObject installed via system packages)
+# PyGObject>=3.44.0  # Installed via apt as python3-gi
+# pygobject-stubs>=2.10.0  # Not needed with system packages
 
 # System integration
 psutil>=5.9.0
