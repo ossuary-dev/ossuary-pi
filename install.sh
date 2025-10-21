@@ -114,6 +114,25 @@ check_hardware() {
         print_warning "Not running on Raspberry Pi hardware"
     fi
 
+    # Check architecture (ARM required for Pi)
+    local arch=$(uname -m)
+    case $arch in
+        armv6l|armv7l|aarch64|arm64)
+            print_success "ARM architecture detected ($arch)"
+            ;;
+        x86_64|i386|i686)
+            print_warning "x86 architecture detected ($arch) - this installer is designed for ARM"
+            read -p "Continue anyway? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                exit 1
+            fi
+            ;;
+        *)
+            print_warning "Unknown architecture: $arch"
+            ;;
+    esac
+
     # Check memory (minimum 1GB recommended)
     local mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     local mem_mb=$((mem_kb / 1024))
@@ -137,6 +156,21 @@ check_hardware() {
         print_success "WiFi interface detected"
     else
         print_warning "No WiFi interface found. WiFi functionality will be limited."
+    fi
+
+    # Check available disk space (require at least 1GB free)
+    local available_kb=$(df / | awk 'NR==2 {print $4}')
+    local available_mb=$((available_kb / 1024))
+
+    if [[ $available_mb -lt 1024 ]]; then
+        print_error "Insufficient disk space. Need at least 1GB free, found ${available_mb}MB"
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            exit 1
+        fi
+    else
+        print_success "Disk space check passed (${available_mb}MB available)"
     fi
 }
 
@@ -164,14 +198,29 @@ update_system() {
 
     export DEBIAN_FRONTEND=noninteractive
 
-    if ! apt-get update; then
-        print_error "Failed to update package lists"
-        exit 1
-    fi
+    # Fix any broken packages first
+    dpkg --configure -a || true
+
+    # Update with retry logic
+    local attempts=0
+    local max_attempts=3
+    while [[ $attempts -lt $max_attempts ]]; do
+        if apt-get update; then
+            break
+        else
+            ((attempts++))
+            if [[ $attempts -lt $max_attempts ]]; then
+                print_warning "Package update failed, retrying in 5 seconds..."
+                sleep 5
+            else
+                print_error "Failed to update package lists after $max_attempts attempts"
+                exit 1
+            fi
+        fi
+    done
 
     if ! apt-get upgrade -y; then
-        print_error "Failed to upgrade system packages"
-        exit 1
+        print_warning "Failed to upgrade some packages, continuing..."
     fi
 
     print_success "System updated successfully"
@@ -235,8 +284,20 @@ create_user() {
         fi
     fi
 
-    # Add user to required groups
-    usermod -a -G video,audio,input,netdev,gpio "$OSSUARY_USER" || true
+    # Add user to required groups (only if they exist)
+    local groups_to_add=()
+    for group in video audio input netdev gpio; do
+        if getent group "$group" &>/dev/null; then
+            groups_to_add+=("$group")
+        else
+            print_warning "Group $group does not exist, skipping"
+        fi
+    done
+
+    if [[ ${#groups_to_add[@]} -gt 0 ]]; then
+        local group_list=$(IFS=,; echo "${groups_to_add[*]}")
+        usermod -a -G "$group_list" "$OSSUARY_USER" || print_warning "Failed to add user to some groups"
+    fi
 
     # Set up sudo access for specific commands
     cat > "/etc/sudoers.d/ossuary" << 'EOF'
@@ -308,12 +369,31 @@ install_ossuary() {
     else
         print_step "Cloning from repository..."
         cd /tmp
-        if git clone "$REPO_URL" ossuary-pi-install; then
-            source_dir="/tmp/ossuary-pi-install"
-        else
-            print_error "Failed to clone repository"
-            exit 1
+
+        # Clean up any existing clone
+        if [[ -d "/tmp/ossuary-pi-install" ]]; then
+            rm -rf "/tmp/ossuary-pi-install"
         fi
+
+        # Clone with retry logic
+        local attempts=0
+        local max_attempts=3
+        while [[ $attempts -lt $max_attempts ]]; do
+            if git clone "$REPO_URL" ossuary-pi-install; then
+                source_dir="/tmp/ossuary-pi-install"
+                break
+            else
+                ((attempts++))
+                if [[ $attempts -lt $max_attempts ]]; then
+                    print_warning "Git clone failed, retrying in 5 seconds..."
+                    sleep 5
+                    rm -rf "/tmp/ossuary-pi-install" 2>/dev/null || true
+                else
+                    print_error "Failed to clone repository after $max_attempts attempts"
+                    exit 1
+                fi
+            fi
+        done
     fi
 
     # Copy source files with error checking
@@ -360,14 +440,28 @@ install_ossuary() {
     print_step "Installing Python dependencies..."
     cd "$INSTALL_DIR"
 
-    # Clean up any conflicting packages first
-    python3 -m pip uninstall --break-system-packages -y typing-extensions || true
-
-    if python3 -m pip install --break-system-packages -r requirements.txt; then
-        print_success "Python dependencies installed"
+    # Handle Debian-managed typing-extensions conflicts
+    if pip3 show typing-extensions 2>/dev/null | grep -q "Installed-files.*debian"; then
+        print_step "Detected Debian-managed typing-extensions, using --force-reinstall"
+        if python3 -m pip install --break-system-packages --force-reinstall -r requirements.txt; then
+            print_success "Python dependencies installed with force-reinstall"
+        else
+            print_error "Failed to install Python dependencies with force-reinstall"
+            exit 1
+        fi
     else
-        print_error "Failed to install Python dependencies"
-        exit 1
+        # Try normal installation first
+        if python3 -m pip install --break-system-packages -r requirements.txt; then
+            print_success "Python dependencies installed"
+        else
+            print_warning "Normal install failed, trying with --force-reinstall"
+            if python3 -m pip install --break-system-packages --force-reinstall -r requirements.txt; then
+                print_success "Python dependencies installed with force-reinstall"
+            else
+                print_error "Failed to install Python dependencies"
+                exit 1
+            fi
+        fi
     fi
 
     print_success "Ossuary Pi files installed"
@@ -412,6 +506,12 @@ configure_display() {
 
     # Configure autologin for ossuary user
     mkdir -p "/etc/systemd/system/getty@tty1.service.d"
+
+    if [[ -f "/etc/systemd/system/getty@tty1.service.d/autologin.conf" ]]; then
+        print_warning "Autologin configuration already exists, backing up"
+        cp "/etc/systemd/system/getty@tty1.service.d/autologin.conf" "/etc/systemd/system/getty@tty1.service.d/autologin.conf.backup"
+    fi
+
     cat > "/etc/systemd/system/getty@tty1.service.d/autologin.conf" << EOF
 [Service]
 ExecStart=
@@ -504,7 +604,16 @@ configure_firewall() {
 
     # Install and configure ufw if not present
     if ! command -v ufw &> /dev/null; then
-        apt-get install -y ufw
+        if ! apt-get install -y ufw; then
+            print_warning "Failed to install ufw, skipping firewall configuration"
+            return 0
+        fi
+    fi
+
+    # Check if ufw is already active
+    if ufw status | grep -q "Status: active"; then
+        print_warning "UFW is already active, backing up current rules"
+        ufw status numbered > "/tmp/ufw-backup-$(date +%Y%m%d-%H%M%S).txt" || true
     fi
 
     # Basic firewall rules
@@ -524,8 +633,11 @@ configure_firewall() {
     ufw allow from 10.0.0.0/8 to any port 8080
     ufw allow from 172.16.0.0/12 to any port 8080
 
-    # Enable firewall
-    ufw --force enable
+    # Enable firewall with error handling
+    if ! ufw --force enable; then
+        print_warning "Failed to enable UFW firewall"
+        return 0
+    fi
 
     print_success "Firewall configured"
 }
@@ -641,6 +753,14 @@ main() {
     check_os
     check_hardware
 
+    # Check internet connectivity
+    print_step "Checking internet connectivity..."
+    if ! ping -c 1 8.8.8.8 &>/dev/null && ! ping -c 1 github.com &>/dev/null; then
+        print_error "No internet connection detected. Installation requires internet access."
+        exit 1
+    fi
+    print_success "Internet connectivity confirmed"
+
     # System preparation
     update_system
     check_python
@@ -666,8 +786,26 @@ main() {
     ask_reboot
 }
 
+# Cleanup function for failed installations
+cleanup_on_error() {
+    print_error "Installation failed at line $LINENO"
+    print_step "Cleaning up partial installation..."
+
+    # Stop any services that might have been started
+    for service in ossuary-config ossuary-netd ossuary-api ossuary-portal ossuary-kiosk; do
+        systemctl stop "$service" 2>/dev/null || true
+        systemctl disable "$service" 2>/dev/null || true
+    done
+
+    # Remove temporary files
+    rm -rf "/tmp/ossuary-pi-install" 2>/dev/null || true
+
+    print_warning "Partial installation cleaned up. You can retry the installation."
+    exit 1
+}
+
 # Error handling
-trap 'print_error "Installation failed at line $LINENO"; exit 1' ERR
+trap cleanup_on_error ERR
 
 # Run main installation
 main "$@"

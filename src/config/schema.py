@@ -1,7 +1,7 @@
 """Configuration schema definitions using Pydantic."""
 
 from typing import Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 import ipaddress
 
 
@@ -23,7 +23,8 @@ class NetworkConfig(BaseModel):
     fallback_timeout: int = Field(default=300, ge=60, le=3600)
     scan_interval: int = Field(default=10, ge=5, le=60)
 
-    @validator("ap_ip")
+    @field_validator("ap_ip")
+    @classmethod
     def validate_ap_ip(cls, v):
         """Validate AP IP address."""
         try:
@@ -32,7 +33,8 @@ class NetworkConfig(BaseModel):
         except ipaddress.AddressValueError:
             raise ValueError("Invalid IPv4 address")
 
-    @validator("ap_subnet")
+    @field_validator("ap_subnet")
+    @classmethod
     def validate_ap_subnet(cls, v):
         """Validate AP subnet."""
         try:
@@ -53,7 +55,8 @@ class KioskConfig(BaseModel):
     hide_cursor: bool = Field(default=True)
     autostart_delay: int = Field(default=5, ge=0, le=60)
 
-    @validator("url", "default_url")
+    @field_validator("url", "default_url")
+    @classmethod
     def validate_url(cls, v):
         """Basic URL validation."""
         if v and not (v.startswith("http://") or v.startswith("https://") or v.startswith("file://")):

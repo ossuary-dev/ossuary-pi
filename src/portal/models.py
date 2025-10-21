@@ -1,7 +1,7 @@
 """Pydantic models for portal API."""
 
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 
 
@@ -16,8 +16,9 @@ class NetworkConnectRequest(BaseModel):
     password: Optional[str] = Field(default=None, max_length=63, description="Network password")
     hidden: bool = Field(default=False, description="Hidden network")
 
-    @validator("password")
-    def validate_password(cls, v, values):
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v):
         """Validate password requirements."""
         if v is not None and len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
@@ -36,7 +37,8 @@ class KioskConfigRequest(BaseModel):
     enable_webgpu: Optional[bool] = Field(default=None, description="Enable WebGPU")
     refresh_interval: Optional[int] = Field(default=None, ge=0, description="Refresh interval in seconds")
 
-    @validator("url")
+    @field_validator("url")
+    @classmethod
     def validate_url(cls, v):
         """Validate URL format."""
         if v and not (v.startswith("http://") or v.startswith("https://") or v.startswith("file://")):
