@@ -78,6 +78,49 @@ start_services() {
     done
 }
 
+install_missing_packages() {
+    print_step "Installing any missing system packages..."
+
+    local missing_packages=()
+    local required_packages=("xinit" "xserver-xorg-legacy")
+
+    for package in "${required_packages[@]}"; do
+        if ! dpkg -l | grep -q "^ii  $package "; then
+            missing_packages+=("$package")
+        fi
+    done
+
+    if [[ ${#missing_packages[@]} -gt 0 ]]; then
+        print_step "Installing missing packages: ${missing_packages[*]}"
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update
+        apt-get install -y "${missing_packages[@]}"
+        print_success "Missing packages installed"
+    else
+        print_success "All required packages already installed"
+    fi
+}
+
+update_x11_config() {
+    print_step "Updating X11 configuration..."
+
+    local ossuary_home="/home/ossuary"
+    if [[ -d "$ossuary_home" ]]; then
+        # Set up automatic X11 startup in .bashrc if not already present
+        if [[ ! -f "$ossuary_home/.bashrc" ]] || ! grep -q "startx" "$ossuary_home/.bashrc"; then
+            cat >> "$ossuary_home/.bashrc" << 'EOF'
+
+# Auto-start X11 on login to tty1
+if [[ -z $DISPLAY && $(tty) = /dev/tty1 ]]; then
+    startx
+fi
+EOF
+            chown ossuary:ossuary "$ossuary_home/.bashrc"
+            print_success "Updated .bashrc for automatic X11 startup"
+        fi
+    fi
+}
+
 update_code() {
     print_step "Updating Ossuary Pi code..."
 
@@ -128,6 +171,13 @@ update_code() {
         chmod +x "$INSTALL_DIR/monitor.sh"
     fi
 
+    # Update this script itself
+    if [[ -f "$temp_dir/update.sh" ]]; then
+        cp "$temp_dir/update.sh" "$INSTALL_DIR/"
+        chmod +x "$INSTALL_DIR/update.sh"
+        print_success "Updated update script"
+    fi
+
     # Update Python dependencies
     print_step "Updating Python dependencies..."
     if [[ -f "$temp_dir/requirements.txt" ]]; then
@@ -150,7 +200,9 @@ main() {
     check_root
     backup_config
     stop_services
+    install_missing_packages
     update_code
+    update_x11_config
     start_services
 
     print_success "Update completed successfully!"
