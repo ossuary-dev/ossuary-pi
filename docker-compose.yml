@@ -76,8 +76,6 @@ services:
       retries: 3
       start_period: 60s
 
-    # Restart policy
-    restart: unless-stopped
 
     # Resource limits (adjust based on Pi model)
     mem_limit: 512m

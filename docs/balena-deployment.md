@@ -20,12 +20,12 @@ balena login
 balena app create ossuary-pi --type raspberrypi4-64
 
 # Clone the repository
-git clone https://github.com/yourusername/ossuary-pi.git
+git clone https://github.com/ossuary-dev/ossuary-pi.git
 cd ossuary-pi
 
 # Add Balena remote
 balena app ossuary-pi
-git remote add balena <your-git-remote-url>
+git remote add balena $(balena app ossuary-pi | grep 'Git remote' | awk '{print $3}')
 ```
 
 ### 2. Deploy Application
@@ -265,7 +265,7 @@ curl http://localhost:8080/api/v1/system/info
 
 ## Support
 
-- **Documentation**: [GitHub Repository](https://github.com/yourusername/ossuary-pi)
-- **Issues**: [GitHub Issues](https://github.com/yourusername/ossuary-pi/issues)
+- **Documentation**: [GitHub Repository](https://github.com/ossuary-dev/ossuary-pi)
+- **Issues**: [GitHub Issues](https://github.com/ossuary-dev/ossuary-pi/issues)
 - **Balena Support**: [Balena Forums](https://forums.balena.io)
 - **Community**: [Discord/Slack Channel]

@@ -7,14 +7,31 @@ import ipaddress
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime, timedelta
 
+# Try modern python-sdbus-networkmanager first (2025 standard)
+try:
+    from sdbus_async.networkmanager import NetworkManager as NMAsyncClient
+    from sdbus_async.networkmanager.enums import DeviceType, DeviceState, ConnectivityState
+    SDBUS_AVAILABLE = True
+except ImportError:
+    SDBUS_AVAILABLE = False
+
+# Fallback to legacy GI bindings (deprecated but may be needed)
 try:
     import gi
     gi.require_version('NM', '1.0')
     from gi.repository import NM, GLib
-    NM_AVAILABLE = True
+    GI_AVAILABLE = True
 except ImportError:
-    NM_AVAILABLE = False
-    logging.warning("NetworkManager GI bindings not available")
+    GI_AVAILABLE = False
+
+if not SDBUS_AVAILABLE and not GI_AVAILABLE:
+    logging.error("No NetworkManager bindings available. Install python-sdbus-networkmanager or python3-gi")
+    raise ImportError("NetworkManager bindings not found")
+
+if SDBUS_AVAILABLE:
+    logging.info("Using modern python-sdbus-networkmanager")
+else:
+    logging.warning("Using deprecated GI bindings - upgrade to python-sdbus-networkmanager")
 
 from .states import (
     NetworkState, ConnectionState, APState, WiFiNetwork,
@@ -38,9 +55,13 @@ class NetworkManager:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-        # NetworkManager client
+        # NetworkManager client - choose implementation
+        self.use_sdbus = SDBUS_AVAILABLE
         self.nm_client = None
         self.wifi_device = None
+
+        # Compatibility layer
+        self._init_nm_client()
 
         # Current state
         self.current_state = NetworkState.UNKNOWN
@@ -65,11 +86,36 @@ class NetworkManager:
             subnet=config.get("ap_subnet", "192.168.42.0/24")
         )
 
-    async def initialize(self) -> None:
-        """Initialize NetworkManager connection."""
-        if not NM_AVAILABLE:
-            raise NetworkManagerError("NetworkManager GI bindings not available")
+    def _init_nm_client(self) -> None:
+        """Initialize NetworkManager client with compatibility layer."""
+        if self.use_sdbus:
+            self.logger.info("Initializing modern python-sdbus-networkmanager")
+            # Will be initialized async in initialize()
+        else:
+            self.logger.warning("Initializing legacy GI NetworkManager bindings")
+            # Legacy initialization will be done in initialize()
 
+    async def _init_sdbus_client(self) -> None:
+        """Initialize python-sdbus NetworkManager client."""
+        try:
+            self.nm_client = NMAsyncClient()
+            # Get WiFi device
+            devices = await self.nm_client.get_devices()
+            for device in devices:
+                device_type = await device.device_type
+                if device_type == DeviceType.WIFI:
+                    self.wifi_device = device
+                    break
+
+            if not self.wifi_device:
+                raise InterfaceError("No WiFi device found")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize sdbus client: {e}")
+            raise NetworkManagerError(f"Failed to initialize NetworkManager: {e}")
+
+    def _init_gi_client(self) -> None:
+        """Initialize legacy GI NetworkManager client."""
         try:
             self.nm_client = NM.Client.new(None)
             self.wifi_device = self._get_wifi_device()
@@ -77,13 +123,29 @@ class NetworkManager:
             if not self.wifi_device:
                 raise InterfaceError("No WiFi device found")
 
-            # Set up signal handlers
-            self._setup_signal_handlers()
+        except Exception as e:
+            self.logger.error(f"Failed to initialize GI client: {e}")
+            raise NetworkManagerError(f"Failed to initialize NetworkManager: {e}")
+
+    async def initialize(self) -> None:
+        """Initialize NetworkManager connection."""
+        if not SDBUS_AVAILABLE and not GI_AVAILABLE:
+            raise NetworkManagerError("No NetworkManager bindings available")
+
+        try:
+            if self.use_sdbus:
+                await self._init_sdbus_client()
+            else:
+                self._init_gi_client()
+
+            # Set up signal handlers (if using GI)
+            if not self.use_sdbus:
+                self._setup_signal_handlers()
 
             # Check current state
             await self._update_network_state()
 
-            self.logger.info("NetworkManager initialized successfully")
+            self.logger.info(f"NetworkManager initialized successfully ({'sdbus' if self.use_sdbus else 'gi'})")
 
         except Exception as e:
             raise NetworkManagerError(f"Failed to initialize NetworkManager: {e}", e)
@@ -287,7 +349,10 @@ class NetworkManager:
                 rsn_flags = ap.get_rsn_flags()
 
                 # Determine security
-                security = bool(flags & NM.80211ApFlags.PRIVACY or wpa_flags or rsn_flags)
+                # Access 80211ApFlags safely (can't use direct attribute due to number prefix)
+                NM80211ApFlags = getattr(NM, "80211ApFlags", None)
+                privacy_flag = getattr(NM80211ApFlags, "PRIVACY", 1) if NM80211ApFlags else 1
+                security = bool((flags & privacy_flag) or wpa_flags or rsn_flags)
                 security_type = self._determine_security_type(flags, wpa_flags, rsn_flags)
 
                 # Check if known
@@ -342,17 +407,26 @@ class NetworkManager:
 
     def _determine_security_type(self, flags, wpa_flags, rsn_flags) -> str:
         """Determine security type from AP flags."""
+        # Access 80211 flags safely (can't use direct attribute due to number prefix)
+        NM80211ApSecurityFlags = getattr(NM, "80211ApSecurityFlags", None)
+        NM80211ApFlags = getattr(NM, "80211ApFlags", None)
+
+        # Define flag constants with fallbacks
+        KEY_MGMT_PSK = getattr(NM80211ApSecurityFlags, "KEY_MGMT_PSK", 0x100) if NM80211ApSecurityFlags else 0x100
+        KEY_MGMT_802_1X = getattr(NM80211ApSecurityFlags, "KEY_MGMT_802_1X", 0x200) if NM80211ApSecurityFlags else 0x200
+        PRIVACY = getattr(NM80211ApFlags, "PRIVACY", 1) if NM80211ApFlags else 1
+
         if rsn_flags:
-            if rsn_flags & NM.80211ApSecurityFlags.KEY_MGMT_PSK:
+            if rsn_flags & KEY_MGMT_PSK:
                 return "WPA2-PSK"
-            elif rsn_flags & NM.80211ApSecurityFlags.KEY_MGMT_802_1X:
+            elif rsn_flags & KEY_MGMT_802_1X:
                 return "WPA2-Enterprise"
         elif wpa_flags:
-            if wpa_flags & NM.80211ApSecurityFlags.KEY_MGMT_PSK:
+            if wpa_flags & KEY_MGMT_PSK:
                 return "WPA-PSK"
-            elif wpa_flags & NM.80211ApSecurityFlags.KEY_MGMT_802_1X:
+            elif wpa_flags & KEY_MGMT_802_1X:
                 return "WPA-Enterprise"
-        elif flags & NM.80211ApFlags.PRIVACY:
+        elif flags & PRIVACY:
             return "WEP"
         else:
             return "Open"

@@ -64,18 +64,48 @@ class BrowserController:
             "--autoplay-policy=no-user-gesture-required",
         ]
 
+        # Detect GPU driver for compatibility (2025 fix)
+        gpu_driver = self._detect_gpu_driver()
+        self.logger.info(f"Detected GPU driver: {gpu_driver}")
+
         # GPU and hardware acceleration flags
         if self.enable_webgl or self.enable_webgpu:
-            cmd.extend([
-                "--enable-gpu",
-                "--use-gl=egl",
-                "--enable-gpu-rasterization",
-                "--enable-native-gpu-memory-buffers",
-                "--ignore-gpu-blocklist",
-                "--ignore-gpu-blacklist",  # Legacy flag
-                "--enable-gpu-memory-buffer-compositor-resources",
-                "--enable-zero-copy",
-            ])
+            if gpu_driver == 'vc4_v3d':
+                # VC4 V3D driver - known issues with EGL
+                cmd.extend([
+                    "--enable-gpu",
+                    "--use-gl=desktop",  # Don't use EGL with VC4
+                    "--enable-gpu-rasterization",
+                    "--ignore-gpu-blocklist",
+                    "--ignore-gpu-blacklist",
+                    "--enable-features=VaapiVideoDecoder",  # Hardware video decode
+                ])
+            elif gpu_driver == 'vc4_fkms':
+                # Fake KMS driver - more stable WebGL
+                cmd.extend([
+                    "--enable-gpu",
+                    "--use-gl=egl",
+                    "--enable-gpu-rasterization",
+                    "--ignore-gpu-blocklist",
+                ])
+            elif gpu_driver == 'software':
+                # Software rendering fallback
+                cmd.extend([
+                    "--disable-gpu",
+                    "--disable-gpu-rasterization",
+                ])
+            else:
+                # Default hardware acceleration
+                cmd.extend([
+                    "--enable-gpu",
+                    "--use-gl=egl",
+                    "--enable-gpu-rasterization",
+                    "--enable-native-gpu-memory-buffers",
+                    "--ignore-gpu-blocklist",
+                    "--ignore-gpu-blacklist",
+                    "--enable-gpu-memory-buffer-compositor-resources",
+                    "--enable-zero-copy",
+                ])
 
             # WebGL specific flags
             if self.enable_webgl:
@@ -96,12 +126,8 @@ class BrowserController:
                 "--disable-webgl",
             ])
 
-        # Security flags (needed for Pi)
-        cmd.extend([
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-        ])
+        # Security flags - conditional based on environment (2025 security fix)
+        cmd.extend(self._get_security_flags())
 
         # Disable various Chrome features that aren't needed
         cmd.extend([
@@ -422,3 +448,105 @@ class BrowserController:
 
         except Exception as e:
             self.logger.debug(f"Failed to cleanup cache: {e}")
+
+    def _detect_gpu_driver(self) -> str:
+        """Detect GPU driver type for Chromium compatibility (2025 fix)."""
+        try:
+            # Check boot config for GPU driver
+            config_files = ["/boot/config.txt", "/boot/firmware/config.txt"]
+
+            for config_file in config_files:
+                if os.path.exists(config_file):
+                    with open(config_file, 'r') as f:
+                        content = f.read()
+
+                    if 'dtoverlay=vc4-kms-v3d' in content:
+                        # Check if V3D is actually working
+                        if self._check_v3d_status():
+                            return 'vc4_v3d'
+                        else:
+                            return 'vc4_fkms'  # Fallback
+                    elif 'dtoverlay=vc4-fkms-v3d' in content:
+                        return 'vc4_fkms'
+
+            # Try to detect via glxinfo
+            try:
+                result = subprocess.run(['glxinfo'], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    output = result.stdout.lower()
+                    if 'vc4 v3d' in output:
+                        return 'vc4_v3d'
+                    elif 'mesa' in output:
+                        return 'vc4_fkms'
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                pass
+
+            # Default to software rendering
+            self.logger.warning("Could not detect GPU driver, using software rendering")
+            return 'software'
+
+        except Exception as e:
+            self.logger.error(f"GPU detection failed: {e}")
+            return 'software'
+
+    def _check_v3d_status(self) -> bool:
+        """Check if VC4 V3D driver is properly initialized."""
+        try:
+            # Check device tree status
+            status_files = [
+                "/proc/device-tree/soc/firmwarekms@7e600000/status",
+                "/proc/device-tree/v3dbus/v3d@7ec04000/status"
+            ]
+
+            for status_file in status_files:
+                if os.path.exists(status_file):
+                    with open(status_file, 'r') as f:
+                        status = f.read().strip().rstrip('\x00')
+                        if status != "okay":
+                            return False
+                else:
+                    return False
+
+            return True
+
+        except Exception:
+            return False
+
+    def _get_security_flags(self) -> List[str]:
+        """Get security flags based on environment (2025 security fix)."""
+        flags = []
+
+        # Check if running in container
+        if self._is_container():
+            self.logger.warning("Container detected - disabling sandbox for compatibility")
+            flags.extend([
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+            ])
+        else:
+            # Host system - try to use sandbox
+            self.logger.info("Host system detected - enabling sandbox")
+            flags.extend([
+                "--enable-sandbox",
+                # Still need dev-shm-usage fix on Pi
+                "--disable-dev-shm-usage",
+            ])
+
+        return flags
+
+    def _is_container(self) -> bool:
+        """Detect if running in container."""
+        try:
+            # Check for container indicators
+            if os.path.exists('/.dockerenv'):
+                return True
+            if 'container' in os.environ or 'BALENA' in os.environ:
+                return True
+            if os.path.exists('/proc/1/cgroup'):
+                with open('/proc/1/cgroup', 'r') as f:
+                    if 'docker' in f.read():
+                        return True
+            return False
+        except Exception:
+            return False

@@ -4,7 +4,11 @@ uvicorn[standard]>=0.24.0
 pydantic>=2.4.0
 python-multipart>=0.0.6
 
-# NetworkManager integration
+# NetworkManager integration (2025 updated)
+# Modern python-sdbus NetworkManager bindings (preferred)
+sdbus-networkmanager>=2.0.0
+
+# Legacy fallback (deprecated but may be needed on older systems)
 PyGObject>=3.44.0
 pygobject-stubs>=2.10.0
 
