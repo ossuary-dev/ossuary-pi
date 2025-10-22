@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from .models import (
     NetworkScanRequest, NetworkConnectRequest, NetworkForgetRequest,
+    APModeRequest, APModeStatus,
     KioskConfigRequest, SystemAction,
     NetworkInfo, NetworkStatus, NetworkScanResponse, NetworkListResponse,
     KioskConfig, SystemInfo, APIResponse, ErrorResponse
@@ -118,6 +119,42 @@ class APIRouter:
                     raise HTTPException(status_code=404, detail="Network not found")
             except Exception as e:
                 self.logger.error(f"Failed to forget network: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # AP Mode endpoints
+        @self.router.get("/network/ap-status", response_model=APModeStatus)
+        async def get_ap_mode_status():
+            """Get current AP mode status."""
+            try:
+                status = await self.network_manager.get_ap_mode_status()
+                return APModeStatus(**status)
+            except Exception as e:
+                self.logger.error(f"Failed to get AP mode status: {e}")
+                # Return default status if check fails
+                return APModeStatus(ap_mode_active=False, ssid=None, ip_address=None)
+
+        @self.router.post("/network/ap-mode", response_model=APIResponse)
+        async def toggle_ap_mode(request: APModeRequest, background_tasks: BackgroundTasks):
+            """Toggle AP mode on or off."""
+            try:
+                if request.enable:
+                    # Enable AP mode
+                    background_tasks.add_task(self._enable_ap_mode)
+                    return APIResponse(
+                        success=True,
+                        message="Enabling AP mode...",
+                        timestamp=datetime.now()
+                    )
+                else:
+                    # Disable AP mode
+                    background_tasks.add_task(self._disable_ap_mode)
+                    return APIResponse(
+                        success=True,
+                        message="Disabling AP mode...",
+                        timestamp=datetime.now()
+                    )
+            except Exception as e:
+                self.logger.error(f"Failed to toggle AP mode: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         # Kiosk endpoints
@@ -357,6 +394,24 @@ class APIRouter:
 
         except Exception as e:
             self.logger.error(f"Failed to reload services: {e}")
+
+    async def _enable_ap_mode(self):
+        """Enable AP mode in background."""
+        try:
+            self.logger.info("Enabling AP mode...")
+            await self.network_manager.enable_ap_mode()
+            self.logger.info("AP mode enabled successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to enable AP mode: {e}")
+
+    async def _disable_ap_mode(self):
+        """Disable AP mode in background."""
+        try:
+            self.logger.info("Disabling AP mode...")
+            await self.network_manager.disable_ap_mode()
+            self.logger.info("AP mode disabled successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to disable AP mode: {e}")
 
     def get_router(self) -> APIRouter:
         """Get the FastAPI router."""

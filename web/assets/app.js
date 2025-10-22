@@ -14,6 +14,7 @@ class OssuaryPortal {
     async init() {
         await this.loadSystemStatus();
         await this.loadNetworkStatus();
+        await this.updateAPModeStatus();
         this.setupWebSocket();
         this.setupEventListeners();
         this.startStatusPolling();
@@ -30,6 +31,9 @@ class OssuaryPortal {
 
         // Auto-refresh networks every 30 seconds
         setInterval(() => this.scanNetworks(false), 30000);
+
+        // Auto-refresh AP mode status
+        setInterval(() => this.updateAPModeStatus(), 10000);
     }
 
     setupWebSocket() {
@@ -103,7 +107,20 @@ class OssuaryPortal {
         }
 
         try {
-            const response = await fetch(`${this.api}/network/scan`, { method: 'POST' });
+            const response = await fetch(`${this.api}/network/scan`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    refresh: true
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
             const data = await response.json();
             this.networks = data.networks || [];
             this.renderWifiNetworks();
@@ -274,18 +291,28 @@ class OssuaryPortal {
         const formData = new FormData(event.target);
         const url = formData.get('url');
         const enableWebgl = formData.get('enable-webgl') === 'on';
+        const enableWebgpu = formData.get('enable-webgpu') === 'on';
+
+        const config = {
+            url: url || null,
+            enable_webgl: enableWebgl,
+            enable_webgpu: enableWebgpu
+        };
 
         try {
             const response = await fetch(`${this.api}/kiosk/config`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url, enable_webgl: enableWebgl })
+                body: JSON.stringify(config)
             });
 
             if (response.ok) {
                 this.showToast('Kiosk configuration saved', 'success');
+                // Optionally refresh the page to show updated config
+                setTimeout(() => window.location.reload(), 1500);
             } else {
-                this.showToast('Failed to save configuration', 'error');
+                const errorData = await response.json().catch(() => ({ detail: 'Unknown error' }));
+                this.showToast(`Failed to save: ${errorData.detail}`, 'error');
             }
         } catch (error) {
             console.error('Save error:', error);
@@ -363,6 +390,66 @@ class OssuaryPortal {
         // Poll network status every 10 seconds
         setInterval(() => this.loadNetworkStatus(), 10000);
     }
+
+    async updateAPModeStatus() {
+        try {
+            const response = await fetch(`${this.api}/network/ap-status`);
+            const data = await response.json();
+
+            const button = document.getElementById('ap-mode-btn');
+            const text = document.getElementById('ap-mode-text');
+
+            if (data.ap_mode_active) {
+                button.className = 'btn btn-success';
+                text.textContent = 'Disable AP Mode';
+            } else {
+                button.className = 'btn btn-warning';
+                text.textContent = 'Enable AP Mode';
+            }
+        } catch (error) {
+            console.debug('AP mode status check failed:', error);
+        }
+    }
+
+    async toggleAPMode() {
+        try {
+            const response = await fetch(`${this.api}/network/ap-status`);
+            const currentStatus = await response.json();
+
+            const action = currentStatus.ap_mode_active ? 'disable' : 'enable';
+            const confirmMessage = currentStatus.ap_mode_active
+                ? 'Disable AP mode and return to normal WiFi connection?'
+                : 'Enable AP mode for testing? This will create a WiFi hotspot named "ossuary-setup".';
+
+            if (!confirm(confirmMessage)) {
+                return;
+            }
+
+            const toggleResponse = await fetch(`${this.api}/network/ap-mode`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enable: !currentStatus.ap_mode_active })
+            });
+
+            if (toggleResponse.ok) {
+                this.showToast(`AP mode ${action}d successfully`, 'success');
+
+                if (!currentStatus.ap_mode_active) {
+                    this.showToast('AP mode enabled. Connect to "ossuary-setup" network to test captive portal.', 'info');
+                }
+
+                // Update status immediately
+                setTimeout(() => this.updateAPModeStatus(), 2000);
+                setTimeout(() => this.loadNetworkStatus(), 3000);
+            } else {
+                const errorData = await toggleResponse.json().catch(() => ({ detail: 'Unknown error' }));
+                this.showToast(`Failed to ${action} AP mode: ${errorData.detail}`, 'error');
+            }
+        } catch (error) {
+            console.error('AP mode toggle error:', error);
+            this.showToast('Failed to toggle AP mode', 'error');
+        }
+    }
 }
 
 // Global functions for onclick handlers
@@ -372,6 +459,10 @@ function selectNetwork(ssid, requiresPassword) {
 
 function scanNetworks() {
     window.portal.scanNetworks();
+}
+
+function toggleAPMode() {
+    window.portal.toggleAPMode();
 }
 
 function cancelWifiForm() {

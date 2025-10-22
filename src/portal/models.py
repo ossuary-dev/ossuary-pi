@@ -30,6 +30,18 @@ class NetworkForgetRequest(BaseModel):
     ssid: str = Field(..., min_length=1, max_length=32, description="Network SSID")
 
 
+class APModeRequest(BaseModel):
+    """Request to toggle AP mode."""
+    enable: bool = Field(..., description="Enable or disable AP mode")
+
+
+class APModeStatus(BaseModel):
+    """AP mode status response."""
+    ap_mode_active: bool = Field(..., description="Whether AP mode is currently active")
+    ssid: Optional[str] = Field(default=None, description="AP mode SSID if active")
+    ip_address: Optional[str] = Field(default=None, description="AP mode IP address if active")
+
+
 class KioskConfigRequest(BaseModel):
     """Request to update kiosk configuration."""
     url: Optional[str] = Field(default=None, description="Display URL")

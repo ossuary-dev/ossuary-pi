@@ -4,6 +4,9 @@ import asyncio
 import logging
 import subprocess
 import ipaddress
+import tempfile
+import shutil
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime, timedelta
 
@@ -161,6 +164,9 @@ class NetworkManager:
                 except Exception as e:
                     self.logger.warning(f"Failed to set up signal handlers: {e}")
                     self.logger.info("Continuing without signal handlers - functionality may be limited")
+
+            # Check for temporary AP mode cleanup (if system rebooted while in test mode)
+            await self._cleanup_temporary_ap_mode()
 
             # Check current state
             await self._update_network_state()
@@ -811,3 +817,195 @@ class NetworkManager:
         # Clean up any resources
         if self.nm_client:
             self.nm_client = None
+
+    # New simple AP mode methods for the API
+    async def get_ap_mode_status(self) -> Dict[str, Any]:
+        """Get current AP mode status."""
+        try:
+            await self._update_network_state()
+
+            if self.current_state == NetworkState.AP_MODE:
+                # Get AP connection details
+                ap_ip = self.ap_config.ip_address if hasattr(self, 'ap_config') else "192.168.4.1"
+                ap_ssid = self.ap_config.ssid if hasattr(self, 'ap_config') else "ossuary-setup"
+
+                return {
+                    "ap_mode_active": True,
+                    "ssid": ap_ssid,
+                    "ip_address": ap_ip
+                }
+            else:
+                return {
+                    "ap_mode_active": False,
+                    "ssid": None,
+                    "ip_address": None
+                }
+        except Exception as e:
+            self.logger.error(f"Failed to get AP mode status: {e}")
+            return {
+                "ap_mode_active": False,
+                "ssid": None,
+                "ip_address": None
+            }
+
+    async def enable_ap_mode(self) -> bool:
+        """Enable AP mode temporarily (will revert on reboot)."""
+        try:
+            self.logger.info("Enabling temporary AP mode for testing")
+
+            # Store current connection to restore later
+            await self._store_current_connection()
+
+            # Start AP mode
+            success = await self.start_access_point()
+
+            if success:
+                self.logger.info("AP mode enabled - will revert on reboot")
+                return True
+            else:
+                self.logger.error("Failed to enable AP mode")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to enable AP mode: {e}")
+            return False
+
+    async def disable_ap_mode(self) -> bool:
+        """Disable AP mode and restore previous connection."""
+        try:
+            self.logger.info("Disabling AP mode")
+
+            # Stop AP mode
+            success = await self.stop_access_point()
+
+            if success:
+                # Try to restore previous connection
+                await self._restore_previous_connection()
+                self.logger.info("AP mode disabled, restored previous connection")
+                return True
+            else:
+                self.logger.error("Failed to disable AP mode")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to disable AP mode: {e}")
+            return False
+
+    async def _store_current_connection(self):
+        """Store current connection info to restore later."""
+        try:
+            # Create a temporary marker file to remember we were in test mode
+            marker_file = Path("/tmp/ossuary_ap_test_mode")
+
+            # Get current active connection if any
+            current_ssid = None
+            for connection in self.nm_client.get_active_connections():
+                nm_connection = connection.get_connection()
+                if not self._is_ap_connection(nm_connection):
+                    # This is a regular WiFi connection
+                    s_wireless = nm_connection.get_setting_wireless()
+                    if s_wireless:
+                        ssid_bytes = s_wireless.get_ssid()
+                        if ssid_bytes:
+                            current_ssid = ssid_bytes.get_data().decode('utf-8')
+                            break
+
+            # Store connection info
+            marker_data = {
+                "previous_ssid": current_ssid,
+                "timestamp": datetime.now().isoformat()
+            }
+
+            import json
+            with open(marker_file, 'w') as f:
+                json.dump(marker_data, f)
+
+            self.logger.info(f"Stored current connection: {current_ssid}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to store current connection: {e}")
+
+    async def _restore_previous_connection(self):
+        """Restore previous connection if available."""
+        try:
+            marker_file = Path("/tmp/ossuary_ap_test_mode")
+
+            if marker_file.exists():
+                import json
+                with open(marker_file, 'r') as f:
+                    marker_data = json.load(f)
+
+                previous_ssid = marker_data.get("previous_ssid")
+
+                if previous_ssid:
+                    self.logger.info(f"Attempting to restore connection to: {previous_ssid}")
+
+                    # Find and activate the previous connection
+                    known_connections = self._get_known_connections()
+                    if previous_ssid in known_connections:
+                        connection = known_connections[previous_ssid]
+                        self.nm_client.activate_connection_async(
+                            connection, self.wifi_device, None, None,
+                            self._activation_callback, None
+                        )
+
+                # Clean up marker file
+                marker_file.unlink()
+
+        except Exception as e:
+            self.logger.warning(f"Failed to restore previous connection: {e}")
+            # Clean up marker file anyway
+            try:
+                Path("/tmp/ossuary_ap_test_mode").unlink(missing_ok=True)
+            except:
+                pass
+
+    async def _cleanup_temporary_ap_mode(self):
+        """Clean up temporary AP mode after reboot."""
+        try:
+            from pathlib import Path
+            marker_file = Path("/tmp/ossuary_ap_test_mode")
+
+            if marker_file.exists():
+                self.logger.info("Found temporary AP mode marker - system was rebooted while in test mode")
+
+                import json
+                try:
+                    with open(marker_file, 'r') as f:
+                        marker_data = json.load(f)
+
+                    previous_ssid = marker_data.get("previous_ssid")
+                    timestamp = marker_data.get("timestamp")
+
+                    self.logger.info(f"AP test mode was active since {timestamp}")
+
+                    if previous_ssid:
+                        self.logger.info(f"Attempting to restore previous connection to: {previous_ssid}")
+
+                        # Small delay to let NetworkManager settle after boot
+                        await asyncio.sleep(2)
+
+                        # Try to connect to the previous network
+                        try:
+                            await self.connect_to_network(previous_ssid, None)
+                            self.logger.info(f"Successfully restored connection to {previous_ssid}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to restore connection to {previous_ssid}: {e}")
+                            self.logger.info("Will continue with normal network auto-connection")
+                    else:
+                        self.logger.info("No previous connection to restore, using auto-connect")
+
+                except json.JSONDecodeError:
+                    self.logger.warning("Corrupted AP mode marker file")
+
+                # Always clean up the marker file
+                marker_file.unlink()
+                self.logger.info("Cleaned up temporary AP mode marker")
+
+        except Exception as e:
+            self.logger.debug(f"AP cleanup check failed (normal if no marker): {e}")
+            # Silently clean up any corrupted marker
+            try:
+                Path("/tmp/ossuary_ap_test_mode").unlink(missing_ok=True)
+            except:
+                pass
