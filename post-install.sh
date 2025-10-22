@@ -20,20 +20,49 @@ log "PID: $$"
 log "These operations may break SSH connections but will continue running"
 
 # Make sure this script continues even if parent process dies
-nohup bash -c "
+nohup bash << 'SCRIPT_END'
 
 # Source the script functions if available
 if [[ -f '/tmp/ossuary_install_functions.sh' ]]; then
     source '/tmp/ossuary_install_functions.sh'
 fi
 
+LOG_FILE="/var/log/ossuary-post-install.log"
+touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/ossuary-post-install.log"
+
 log() {
-    echo \"\$(date): \$1\" | tee -a '$LOG_FILE'
+    echo "$(date): $1" | tee -a "$LOG_FILE"
+}
+
+# Function to check if DNS configuration is needed
+check_if_dns_needed() {
+    log "Checking if DNS configuration is needed..."
+
+    # Check if NetworkManager DNS is already configured
+    if [[ -f /etc/NetworkManager/conf.d/99-ossuary-dns.conf ]]; then
+        log "NetworkManager DNS config already exists"
+        return 1  # Not needed
+    fi
+
+    # Check if dnsmasq config exists
+    if [[ -f /etc/NetworkManager/dnsmasq-shared.d/99-ossuary-captive.conf ]]; then
+        log "dnsmasq captive portal config already exists"
+        return 1  # Not needed
+    fi
+
+    # Check if we're on a desktop system (probably doesn't need captive portal)
+    if systemctl is-active --quiet graphical.target && pgrep -f "lightdm|gdm|sddm|lxdm" > /dev/null; then
+        log "Desktop environment detected - DNS captive portal config not needed"
+        return 1  # Not needed
+    fi
+
+    log "DNS configuration is needed"
+    return 0  # Needed
 }
 
 # Function to configure DNS for captive portal
 configure_captive_portal_dns() {
-    log \"Configuring DNS for captive portal detection...\"
+    log "Configuring DNS for captive portal detection..."
 
     # Create NetworkManager dispatcher script for DNS override
     cat > /etc/NetworkManager/dispatcher.d/99-ossuary-dns << 'EOF'
@@ -53,7 +82,7 @@ fi
 EOF
 
     chmod +x /etc/NetworkManager/dispatcher.d/99-ossuary-dns
-    log \"DNS dispatcher script created\"
+    log "DNS dispatcher script created"
 
     # Create dnsmasq configuration for AP mode
     mkdir -p /etc/dnsmasq.d
@@ -69,75 +98,78 @@ address=/clients3.google.com/192.168.42.1
 address=/captive.apple.com/192.168.42.1
 EOF
 
-    log \"dnsmasq configuration created\"
+    log "dnsmasq configuration created"
 
     # This will restart NetworkManager and break SSH
-    log \"WARNING: About to restart NetworkManager - SSH will disconnect\"
+    log "WARNING: About to restart NetworkManager - SSH will disconnect"
     sleep 2
     systemctl restart NetworkManager
-    log \"NetworkManager restarted\"
+    log "NetworkManager restarted"
 }
 
 # Function to perform final system configuration
 final_system_setup() {
-    log \"Performing final system setup...\"
+    log "Performing final system setup..."
 
     # Reload systemd to pick up any new services
     systemctl daemon-reload
 
     # Enable and start critical services
     for service in ossuary-config ossuary-display ossuary-kiosk ossuary-netd ossuary-portal; do
-        if systemctl list-unit-files | grep -q \"\$service.service\"; then
-            log \"Enabling \$service service\"
-            systemctl enable \"\$service\" || log \"Failed to enable \$service\"
+        if systemctl list-unit-files | grep -q "$service.service"; then
+            log "Enabling $service service"
+            systemctl enable "$service" || log "Failed to enable $service"
         fi
     done
 
     # Start essential services that don't depend on network
     for service in ossuary-config ossuary-display; do
-        if systemctl list-unit-files | grep -q \"\$service.service\"; then
-            log \"Starting \$service service\"
-            systemctl start \"\$service\" || log \"Failed to start \$service\"
+        if systemctl list-unit-files | grep -q "$service.service"; then
+            log "Starting $service service"
+            systemctl start "$service" || log "Failed to start $service"
         fi
     done
 
-    log \"Services configured\"
+    log "Services configured"
 }
 
 # Function to reboot system
 schedule_reboot() {
-    log \"Scheduling system reboot in 30 seconds...\"
-    log \"Post-install operations completed successfully\"
-    log \"System will reboot to apply all changes\"
+    log "Scheduling system reboot in 30 seconds..."
+    log "Post-install operations completed successfully"
+    log "System will reboot to apply all changes"
 
     # Schedule reboot
-    shutdown -r +1 \"Ossuary post-install reboot - system will be ready in 2 minutes\" || reboot
+    shutdown -r +1 "Ossuary post-install reboot - system will be ready in 2 minutes" || reboot
 }
 
 # Execute post-install operations
-log \"Starting DNS configuration (will break SSH)...\"
-configure_captive_portal_dns
+if check_if_dns_needed; then
+    log "Starting DNS configuration (will break SSH)..."
+    configure_captive_portal_dns
+    log "DNS configuration completed"
+else
+    log "DNS configuration not needed - skipping"
+fi
 
-log \"DNS configuration completed\"
-
-log \"Performing final system setup...\"
+log "Performing final system setup..."
 final_system_setup
 
-log \"Scheduling reboot...\"
+log "Scheduling reboot..."
 schedule_reboot
 
 # Clean up post-install service and files
-log \"Cleaning up post-install service...\"
+log "Cleaning up post-install service..."
 systemctl disable ossuary-post-install.service
 rm -f /etc/systemd/system/ossuary-post-install.service
 rm -f /tmp/ossuary_install_functions.sh
 systemctl daemon-reload
 
-log \"=== Post-install operations completed ===\""
+log "=== Post-install operations completed ==="
 
-" > /dev/null 2>&1 &
+SCRIPT_END
 
-log "Post-install script started in background (PID: $!)"
+log "Post-install script started in background"
 log "Operations will continue even if SSH disconnects"
 log "Check $LOG_FILE for progress"
 

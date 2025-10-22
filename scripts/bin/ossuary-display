@@ -11,7 +11,6 @@ from pathlib import Path
 sys.path.insert(0, '/opt/ossuary/src')
 
 from display.service import DisplayService
-from common.logging import setup_logging
 
 
 class GracefulExit(Exception):
@@ -28,7 +27,13 @@ def signal_handler(signum, frame):
 async def main():
     """Main display service loop."""
     # Set up logging
-    setup_logging("ossuary-display", level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
     logger = logging.getLogger(__name__)
 
     logger.info("Starting Ossuary Display Service")

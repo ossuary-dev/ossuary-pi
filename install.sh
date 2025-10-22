@@ -1623,10 +1623,16 @@ WantedBy=multi-user.target
 EOF
 
     # Copy post-install script to installation directory
-    cp "$(dirname "$0")/post-install.sh" /opt/ossuary/post-install.sh || {
-        print_error "Failed to copy post-install script"
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$script_dir/post-install.sh" ]]; then
+        cp "$script_dir/post-install.sh" /opt/ossuary/post-install.sh || {
+            print_error "Failed to copy post-install script"
+            return 1
+        }
+    else
+        print_error "post-install.sh not found in $script_dir"
         return 1
-    }
+    fi
     chmod +x /opt/ossuary/post-install.sh
 
     # Enable the post-install service
