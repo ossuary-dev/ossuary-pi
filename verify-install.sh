@@ -168,7 +168,36 @@ else
 fi
 
 echo
-echo "10. Test Service Control"
+echo "10. Auto-Login Configuration"
+echo "==========================="
+
+# Check for auto-login configuration
+if systemctl is-active --quiet lightdm; then
+    if grep -q "autologin-user=" /etc/lightdm/lightdm.conf 2>/dev/null; then
+        success "LightDM auto-login configured"
+    else
+        warning "LightDM found but auto-login not configured"
+    fi
+elif systemctl is-active --quiet gdm || systemctl is-active --quiet gdm3; then
+    if grep -q "AutomaticLogin=" /etc/gdm3/custom.conf 2>/dev/null; then
+        success "GDM auto-login configured"
+    else
+        warning "GDM found but auto-login not configured"
+    fi
+elif systemctl is-active --quiet sddm; then
+    if [[ -f /etc/sddm.conf.d/autologin.conf ]]; then
+        success "SDDM auto-login configured"
+    else
+        warning "SDDM found but auto-login not configured"
+    fi
+elif [[ -f /etc/systemd/system/getty@tty1.service.d/autologin.conf ]]; then
+    success "Systemd auto-login configured on tty1"
+else
+    warning "No auto-login configuration found"
+fi
+
+echo
+echo "11. Test Service Control"
 echo "======================="
 
 if command -v ossuaryctl >/dev/null; then

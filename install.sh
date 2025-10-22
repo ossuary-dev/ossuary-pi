@@ -877,6 +877,81 @@ EOF
     print_success "NetworkManager configured"
 }
 
+configure_desktop_autologin() {
+    local user="$1"
+    print_step "Configuring auto-login for desktop environment..."
+
+    # Detect display manager and configure auto-login
+    if systemctl is-active --quiet lightdm; then
+        print_step "Configuring LightDM auto-login for user: $user"
+
+        # Configure LightDM auto-login
+        if [[ ! -f /etc/lightdm/lightdm.conf ]]; then
+            mkdir -p /etc/lightdm
+            cat > /etc/lightdm/lightdm.conf << EOF
+[Seat:*]
+autologin-user=$user
+autologin-user-timeout=0
+EOF
+        else
+            # Update existing config
+            sed -i "s/^#autologin-user=.*/autologin-user=$user/" /etc/lightdm/lightdm.conf
+            sed -i "s/^autologin-user=.*/autologin-user=$user/" /etc/lightdm/lightdm.conf
+
+            if ! grep -q "autologin-user=" /etc/lightdm/lightdm.conf; then
+                echo "autologin-user=$user" >> /etc/lightdm/lightdm.conf
+            fi
+
+            sed -i "s/^#autologin-user-timeout=.*/autologin-user-timeout=0/" /etc/lightdm/lightdm.conf
+            sed -i "s/^autologin-user-timeout=.*/autologin-user-timeout=0/" /etc/lightdm/lightdm.conf
+
+            if ! grep -q "autologin-user-timeout=" /etc/lightdm/lightdm.conf; then
+                echo "autologin-user-timeout=0" >> /etc/lightdm/lightdm.conf
+            fi
+        fi
+
+        print_success "LightDM auto-login configured for $user"
+
+    elif systemctl is-active --quiet gdm || systemctl is-active --quiet gdm3; then
+        print_step "Configuring GDM auto-login for user: $user"
+
+        # Configure GDM auto-login
+        mkdir -p /etc/gdm3
+        cat > /etc/gdm3/custom.conf << EOF
+[daemon]
+AutomaticLogin=$user
+AutomaticLoginEnable=true
+EOF
+        print_success "GDM auto-login configured for $user"
+
+    elif systemctl is-active --quiet sddm; then
+        print_step "Configuring SDDM auto-login for user: $user"
+
+        # Configure SDDM auto-login
+        mkdir -p /etc/sddm.conf.d
+        cat > /etc/sddm.conf.d/autologin.conf << EOF
+[Autologin]
+User=$user
+Session=
+EOF
+        print_success "SDDM auto-login configured for $user"
+
+    else
+        print_warning "No supported display manager found for auto-login configuration"
+        print_step "Attempting systemd auto-login on tty1..."
+
+        # Configure systemd auto-login as fallback
+        mkdir -p /etc/systemd/system/getty@tty1.service.d
+        cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf << EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin $user --noclear %I \$TERM
+EOF
+        systemctl daemon-reload
+        print_success "Systemd auto-login configured for $user"
+    fi
+}
+
 configure_display() {
     print_step "Configuring display system..."
 
@@ -965,6 +1040,9 @@ EOF
             sudo -u "$desktop_user" DISPLAY=:0 xhost +SI:localuser:root 2>/dev/null || true
             print_step "Added root user to X11 access list"
         fi
+
+        # Configure auto-login for desktop environment
+        configure_desktop_autologin "$desktop_user"
 
         # Set up root X authority by copying from desktop user
         if [[ -f "$desktop_home/.Xauthority" ]]; then
