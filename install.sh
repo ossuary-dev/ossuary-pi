@@ -35,9 +35,6 @@ REQUIRED_PACKAGES=(
     "wget"
     "network-manager"
     "chromium"
-    "xserver-xorg"
-    "openbox"
-    "unclutter"
     "sqlite3"
     "hostapd"
     "dnsmasq"
@@ -46,10 +43,32 @@ REQUIRED_PACKAGES=(
     "libcairo2-dev"
     "libgirepository1.0-dev"
     "gir1.2-nm-1.0"
+)
+
+# Display stack packages (added separately based on OS detection)
+DISPLAY_PACKAGES_X11=(
+    "xserver-xorg"
+    "xserver-xorg-core"
+    "xserver-common"
     "xinit"
-    "xserver-xorg-legacy"
     "x11-utils"
     "x11-xserver-utils"
+    "xserver-xorg-legacy"
+    "xserver-xorg-video-fbdev"
+    "openbox"
+    "unclutter"
+)
+
+# Meta-packages for Pi OS Trixie (Debian 13) - official way to add display stack
+DISPLAY_PACKAGES_PI_TRIXIE=(
+    "rpd-x-core"
+    "gldriver-test"
+    "xcompmgr"
+)
+
+# Fallback meta-package for Pi OS Bookworm (Debian 12)
+DISPLAY_PACKAGES_PI_BOOKWORM=(
+    "rpd-x-core"
 )
 
 print_banner() {
@@ -282,6 +301,19 @@ detect_chromium_package() {
     fi
 
     # Check what's available in repositories
+    # For Pi OS 64-bit, chromium (not chromium-browser) is the correct package
+    local pi_model=$(detect_pi_model)
+    local arch=$(uname -m)
+
+    if [[ "$arch" == "aarch64" || "$arch" == "arm64" ]] && [[ "$pi_model" == "Pi5" ]]; then
+        # Pi 5 with 64-bit OS should use chromium
+        if apt-cache show chromium >/dev/null 2>&1; then
+            echo "chromium"
+            return
+        fi
+    fi
+
+    # Standard detection for other systems
     if apt-cache show chromium-browser >/dev/null 2>&1; then
         echo "chromium-browser"
     elif apt-cache show chromium >/dev/null 2>&1; then
@@ -291,6 +323,123 @@ detect_chromium_package() {
     else
         echo "skip-browser"
     fi
+}
+
+detect_pi_os_variant() {
+    print_step "Detecting Raspberry Pi OS variant and version..."
+
+    # Detect Debian version
+    local debian_version=""
+    if [[ -f /etc/os-release ]]; then
+        debian_version=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2)
+        print_step "Detected Debian version: $debian_version"
+    fi
+
+    # Check if this is Pi OS Lite (no desktop packages)
+    if ! dpkg -l | grep -q "raspberrypi-ui-mods"; then
+        if [[ "$debian_version" == "13" ]]; then
+            print_step "Pi OS Trixie Lite detected - will install Trixie display stack"
+            export PI_OS_VARIANT="trixie_lite"
+        else
+            print_step "Pi OS Lite detected - will install standard display stack"
+            export PI_OS_VARIANT="bookworm_lite"
+        fi
+        return 0  # Is Lite
+    else
+        print_step "Pi OS with desktop detected - using existing display stack"
+        export PI_OS_VARIANT="desktop"
+        return 1  # Has desktop
+    fi
+}
+
+install_display_packages() {
+    print_step "Installing display stack packages for $PI_OS_VARIANT..."
+
+    # Choose package list based on OS variant
+    local packages_to_install=()
+    local use_meta_package=false
+
+    case "$PI_OS_VARIANT" in
+        "trixie_lite")
+            print_step "Using Trixie meta-packages (Debian 13)"
+            packages_to_install=("${DISPLAY_PACKAGES_PI_TRIXIE[@]}")
+            use_meta_package=true
+            ;;
+        "bookworm_lite")
+            print_step "Using Bookworm meta-packages (Debian 12)"
+            packages_to_install=("${DISPLAY_PACKAGES_PI_BOOKWORM[@]}")
+            use_meta_package=true
+            ;;
+        *)
+            print_step "Using individual packages (fallback)"
+            packages_to_install=("${DISPLAY_PACKAGES_X11[@]}")
+            use_meta_package=false
+            ;;
+    esac
+
+    if [ "$use_meta_package" = true ]; then
+        # Install Pi-specific display packages
+        print_step "Installing Pi OS meta-packages..."
+        for package in "${packages_to_install[@]}"; do
+            if apt-cache show "$package" >/dev/null 2>&1; then
+                echo -n "Installing $package... "
+                if apt-get install -y "$package"; then
+                    echo -e "${GREEN}OK${NC}"
+                else
+                    echo -e "${YELLOW}FAILED - will try individual packages${NC}"
+                    use_meta_package=false
+                    break
+                fi
+            else
+                echo -e "${YELLOW}$package not available - will try individual packages${NC}"
+                use_meta_package=false
+                break
+            fi
+        done
+    fi
+
+    # If meta-package failed or not available, install individual packages
+    if [ "$use_meta_package" = false ]; then
+        print_step "Installing individual display packages..."
+        for package in "${DISPLAY_PACKAGES_X11[@]}"; do
+            echo -n "Installing $package... "
+
+            # Check if package is already installed
+            if dpkg -l "$package" 2>/dev/null | grep -q "^ii"; then
+                echo -e "${GREEN}ALREADY INSTALLED${NC}"
+                continue
+            fi
+
+            # Check if package exists
+            if ! apt-cache show "$package" >/dev/null 2>&1; then
+                echo -e "${YELLOW}NOT AVAILABLE${NC}"
+                continue
+            fi
+
+            local attempts=0
+            local max_attempts=3
+            local success=false
+
+            while [[ $attempts -lt $max_attempts ]]; do
+                if apt-get install -y --no-install-recommends "$package"; then
+                    echo -e "${GREEN}OK${NC}"
+                    success=true
+                    break
+                else
+                    ((attempts++))
+                    if [[ $attempts -lt $max_attempts ]]; then
+                        echo -n "retry $attempts... "
+                        sleep 2
+                    else
+                        echo -e "${RED}FAILED${NC}"
+                        print_warning "Failed to install $package - continuing anyway"
+                    fi
+                fi
+            done
+        done
+    fi
+
+    print_success "Display stack installation completed"
 }
 
 install_packages() {
@@ -383,6 +532,11 @@ install_packages() {
 
     # Python GI packages are now installed via apt, no additional pip packages needed
     print_success "System Python GI packages installed via apt"
+
+    # Install display stack if needed (Pi OS Lite)
+    if detect_pi_os_variant; then
+        install_display_packages
+    fi
 
     print_success "All packages installed successfully"
 }
@@ -812,7 +966,7 @@ EOF
         fi
     fi
 
-    # Enable GPU memory split for Pi
+    # Configure boot settings for display and kiosk mode
     if [[ -f /boot/firmware/config.txt ]] || [[ -f /boot/config.txt ]]; then
         local config_file
         if [[ -f /boot/firmware/config.txt ]]; then
@@ -821,12 +975,119 @@ EOF
             config_file="/boot/config.txt"
         fi
 
-        # Enable GPU memory split and V3D driver
-        if ! grep -q "gpu_mem=" "$config_file"; then
-            echo "gpu_mem=128" >> "$config_file"
+        print_step "Configuring $config_file for kiosk mode..."
+
+        # Backup config file
+        cp "$config_file" "$config_file.backup" 2>/dev/null || true
+
+        # Pi model detection for specific settings
+        local pi_model=$(detect_pi_model)
+        local debian_version=$(grep VERSION_ID /etc/os-release 2>/dev/null | cut -d'"' -f2 || echo "12")
+
+        # Common settings for all Pi models
+        local settings_to_add=()
+
+        # HDMI settings for headless operation
+        if ! grep -q "hdmi_force_hotplug=1" "$config_file"; then
+            settings_to_add+=("hdmi_force_hotplug=1")
         fi
-        if ! grep -q "dtoverlay=vc4-kms-v3d" "$config_file"; then
-            echo "dtoverlay=vc4-kms-v3d" >> "$config_file"
+        if ! grep -q "hdmi_ignore_edid=0xa5000080" "$config_file"; then
+            settings_to_add+=("hdmi_ignore_edid=0xa5000080")
+        fi
+
+        # Display driver settings based on Pi model and OS version
+        if [[ "$pi_model" == "Pi5" ]]; then
+            # Pi 5 specific settings (Trixie/modern)
+            print_step "Applying Pi 5 display settings..."
+
+            # For Pi 5, use CMA instead of gpu_mem (Trixie recommendation)
+            if ! grep -q "dtoverlay=vc4-kms-v3d" "$config_file"; then
+                if [[ "$debian_version" == "13" ]]; then
+                    # Trixie: Use CMA for memory management
+                    settings_to_add+=("dtoverlay=vc4-kms-v3d,cma-256")
+                else
+                    # Bookworm fallback
+                    settings_to_add+=("dtoverlay=vc4-kms-v3d")
+                fi
+            fi
+
+            # Headless resolution for Pi 5 (via config.txt method)
+            if ! grep -q "hdmi_group=" "$config_file"; then
+                settings_to_add+=("hdmi_group=2")
+                settings_to_add+=("hdmi_mode=82")  # 1920x1080 @ 60Hz
+            fi
+
+            # Alternative headless resolution method
+            if ! grep -q "framebuffer_width=" "$config_file"; then
+                settings_to_add+=("framebuffer_width=1920")
+                settings_to_add+=("framebuffer_height=1080")
+            fi
+
+        elif [[ "$pi_model" == "Pi4" ]]; then
+            # Pi 4 settings
+            print_step "Applying Pi 4 display settings..."
+
+            if ! grep -q "dtoverlay=vc4-kms-v3d" "$config_file"; then
+                settings_to_add+=("dtoverlay=vc4-kms-v3d")
+            fi
+            if ! grep -q "gpu_mem=" "$config_file"; then
+                settings_to_add+=("gpu_mem=128")
+            fi
+
+        else
+            # Pi 3 and older
+            print_step "Applying Pi 3/older display settings..."
+
+            if ! grep -q "dtoverlay=vc4-kms-v3d" "$config_file"; then
+                settings_to_add+=("dtoverlay=vc4-kms-v3d")
+            fi
+            if ! grep -q "gpu_mem=" "$config_file"; then
+                settings_to_add+=("gpu_mem=64")
+            fi
+        fi
+
+        # Disable rainbow splash
+        if ! grep -q "disable_splash=1" "$config_file"; then
+            settings_to_add+=("disable_splash=1")
+        fi
+
+        # Disable overscan (important for kiosk displays)
+        if ! grep -q "disable_overscan=1" "$config_file"; then
+            settings_to_add+=("disable_overscan=1")
+        fi
+
+        # Add all settings
+        if [[ ${#settings_to_add[@]} -gt 0 ]]; then
+            echo "" >> "$config_file"
+            echo "# Ossuary Pi kiosk mode settings" >> "$config_file"
+            for setting in "${settings_to_add[@]}"; do
+                echo "$setting" >> "$config_file"
+                print_step "Added: $setting"
+            done
+        fi
+
+        # Configure cmdline.txt for headless resolution (Pi 5 with Trixie)
+        if [[ "$pi_model" == "Pi5" && "$debian_version" == "13" ]]; then
+            local cmdline_file
+            if [[ -f /boot/firmware/cmdline.txt ]]; then
+                cmdline_file="/boot/firmware/cmdline.txt"
+            elif [[ -f /boot/cmdline.txt ]]; then
+                cmdline_file="/boot/cmdline.txt"
+            fi
+
+            if [[ -n "$cmdline_file" && -f "$cmdline_file" ]]; then
+                print_step "Configuring $cmdline_file for headless resolution..."
+
+                # Backup cmdline file
+                cp "$cmdline_file" "$cmdline_file.backup" 2>/dev/null || true
+
+                # Add video resolution if not present
+                if ! grep -q "video=HDMI-A-1:" "$cmdline_file"; then
+                    # Add to beginning of line
+                    sed -i '1s/^/video=HDMI-A-1:1920x1080@60D /' "$cmdline_file"
+                    print_step "Added headless resolution to cmdline.txt"
+                fi
+            fi
         fi
     fi
 
@@ -840,14 +1101,14 @@ configure_services() {
     systemctl daemon-reload
 
     # Enable Ossuary services
-    local services=("ossuary-config" "ossuary-netd" "ossuary-api" "ossuary-portal" "ossuary-kiosk")
+    local services=("ossuary-config" "ossuary-netd" "ossuary-api" "ossuary-portal" "ossuary-display" "ossuary-kiosk")
     local failed_services=()
 
     for service in "${services[@]}"; do
         if [[ -f "/etc/systemd/system/${service}.service" ]]; then
             if systemctl enable "$service"; then
                 echo "Enabled $service"
-                # Start the service immediately (except kiosk which needs X11)
+                # Start the service immediately (except kiosk which needs display service)
                 if [[ "$service" != "ossuary-kiosk" ]]; then
                     if systemctl start "$service"; then
                         echo "Started $service"
@@ -998,14 +1259,14 @@ print_completion() {
     echo "  • Firewall rules applied"
     echo ""
     echo -e "${CYAN}Service Status:${NC}"
-    for service in ossuary-config ossuary-netd ossuary-api ossuary-portal; do
+    for service in ossuary-config ossuary-netd ossuary-api ossuary-portal ossuary-display; do
         if systemctl is-active "$service" &>/dev/null; then
             echo "  • $service: ${GREEN}running${NC}"
         else
             echo "  • $service: ${YELLOW}stopped (will start on reboot)${NC}"
         fi
     done
-    echo "  • ossuary-kiosk: ${YELLOW}will start after reboot with X11${NC}"
+    echo "  • ossuary-kiosk: ${YELLOW}will start after reboot with display service${NC}"
     echo ""
     echo -e "${YELLOW}Next Steps:${NC}"
     echo "  1. Reboot the system: ${BLUE}sudo reboot${NC}"

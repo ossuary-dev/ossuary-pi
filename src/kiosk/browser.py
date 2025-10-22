@@ -26,7 +26,7 @@ class BrowserController:
 
         # Configuration
         self.current_url = config.get("url", "")
-        self.default_url = config.get("default_url", "http://ossuary.local")
+        self.default_url = config.get("default_url", "http://localhost/starter")
         self.enable_webgl = config.get("enable_webgl", True)
         self.enable_webgpu = config.get("enable_webgpu", False)
         self.disable_screensaver = config.get("disable_screensaver", True)
@@ -93,8 +93,21 @@ class BrowserController:
                 self.logger.warning(f"User-specified binary {browser_pref} not working: {e}")
 
         # Auto-detect what's available (intelligent detection)
-        # Only real browsers that exist on Pi/ARM
-        candidates = ['chromium-browser', 'chromium']
+        # Priority order based on Pi model and OS version
+        candidates = []
+
+        # Detect OS version
+        try:
+            with open('/etc/os-release', 'r') as f:
+                os_content = f.read()
+                if 'VERSION_ID="13"' in os_content:  # Trixie
+                    # Trixie prefers chromium package
+                    candidates = ['chromium', 'chromium-browser']
+                else:  # Bookworm and older
+                    candidates = ['chromium-browser', 'chromium']
+        except:
+            # Fallback order
+            candidates = ['chromium-browser', 'chromium']
 
         for binary in candidates:
             try:
@@ -119,7 +132,7 @@ class BrowserController:
 
         # Fallback based on Pi model if nothing found
         if self.pi_model == 'Pi5':
-            return 'chromium'  # Pi 5 typically uses chromium
+            return 'chromium'  # Pi 5 with Trixie typically uses chromium
         else:
             return 'chromium-browser'  # Older Pi models often use chromium-browser
 

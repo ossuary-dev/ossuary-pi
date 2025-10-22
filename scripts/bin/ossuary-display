@@ -1,0 +1,76 @@
+#!/opt/ossuary/venv/bin/python
+"""Ossuary Display Service - Manages X server and display setup."""
+
+import asyncio
+import logging
+import sys
+import signal
+from pathlib import Path
+
+# Add project root to path
+sys.path.insert(0, '/opt/ossuary/src')
+
+from display.service import DisplayService
+from common.logging import setup_logging
+
+
+class GracefulExit(Exception):
+    """Exception raised for graceful service shutdown."""
+    pass
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals."""
+    logging.info(f"Received signal {signum}, shutting down gracefully")
+    raise GracefulExit()
+
+
+async def main():
+    """Main display service loop."""
+    # Set up logging
+    setup_logging("ossuary-display", level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
+    logger.info("Starting Ossuary Display Service")
+
+    # Set up signal handlers
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+
+    display_service = None
+
+    try:
+        # Initialize display service
+        display_service = DisplayService()
+
+        # Start the service
+        await display_service.start()
+
+        logger.info("Display service started successfully")
+
+        # Keep running
+        while True:
+            await asyncio.sleep(1)
+
+    except GracefulExit:
+        logger.info("Graceful shutdown requested")
+    except Exception as e:
+        logger.error(f"Display service error: {e}")
+        raise
+    finally:
+        if display_service:
+            try:
+                await display_service.stop()
+                logger.info("Display service stopped")
+            except Exception as e:
+                logger.error(f"Error stopping display service: {e}")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Display service interrupted")
+    except Exception as e:
+        logging.error(f"Display service failed: {e}")
+        sys.exit(1)

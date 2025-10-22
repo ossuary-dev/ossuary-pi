@@ -121,6 +121,34 @@ class PortalServer:
                 self.logger.error(f"Failed to serve index: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
 
+        @app.get("/starter", response_class=HTMLResponse)
+        async def starter_page(request: Request):
+            """Serve starter page with system information."""
+            try:
+                # Get system information
+                hostname = self._get_hostname()
+                ip_address = self._get_ip_address()
+                mac_address = self._get_mac_address()
+                model = self._get_model()
+                os_version = self._get_os_version()
+                uptime = self._get_uptime()
+
+                return templates.TemplateResponse(
+                    "starter.html",
+                    {
+                        "request": request,
+                        "hostname": hostname,
+                        "ip_address": ip_address,
+                        "mac_address": mac_address,
+                        "model": model,
+                        "os_version": os_version,
+                        "uptime": uptime
+                    }
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to serve starter page: {e}")
+                raise HTTPException(status_code=500, detail="Internal server error")
+
         # Captive portal detection endpoints
         @app.get("/generate_204")
         @app.get("/gen_204")
@@ -240,6 +268,86 @@ class PortalServer:
 
         if self.network_manager:
             await self.network_manager.shutdown()
+
+    def _get_hostname(self) -> str:
+        """Get system hostname."""
+        try:
+            import socket
+            return socket.gethostname()
+        except Exception:
+            return "ossuary-pi"
+
+    def _get_ip_address(self) -> str:
+        """Get primary IP address."""
+        try:
+            import socket
+            # Connect to a remote address to determine local IP
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+        except Exception:
+            try:
+                # Fallback: get from hostname
+                import socket
+                return socket.gethostbyname(socket.gethostname())
+            except Exception:
+                return "192.168.0.1"
+
+    def _get_mac_address(self) -> str:
+        """Get MAC address of primary interface."""
+        try:
+            import uuid
+            mac = uuid.getnode()
+            return ':'.join(f'{mac:012x}'[i:i+2] for i in range(0, 12, 2))
+        except Exception:
+            return "00:00:00:00:00:00"
+
+    def _get_model(self) -> str:
+        """Get Pi model."""
+        try:
+            with open('/proc/cpuinfo', 'r') as f:
+                for line in f:
+                    if line.startswith('Model'):
+                        return line.split(':', 1)[1].strip()
+                    elif 'BCM2711' in line:
+                        return 'Raspberry Pi 4'
+                    elif 'BCM2712' in line:
+                        return 'Raspberry Pi 5'
+                    elif 'BCM2837' in line:
+                        return 'Raspberry Pi 3'
+            return 'Raspberry Pi'
+        except Exception:
+            return 'Unknown'
+
+    def _get_os_version(self) -> str:
+        """Get OS version."""
+        try:
+            with open('/etc/os-release', 'r') as f:
+                for line in f:
+                    if line.startswith('PRETTY_NAME'):
+                        return line.split('=', 1)[1].strip().strip('"')
+            return 'Linux'
+        except Exception:
+            return 'Unknown'
+
+    def _get_uptime(self) -> str:
+        """Get system uptime."""
+        try:
+            with open('/proc/uptime', 'r') as f:
+                uptime_seconds = float(f.read().split()[0])
+
+            days = int(uptime_seconds // 86400)
+            hours = int((uptime_seconds % 86400) // 3600)
+            minutes = int((uptime_seconds % 3600) // 60)
+
+            if days > 0:
+                return f"{days}d {hours}h {minutes}m"
+            elif hours > 0:
+                return f"{hours}h {minutes}m"
+            else:
+                return f"{minutes}m"
+        except Exception:
+            return "Unknown"
 
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""

@@ -1,8 +1,8 @@
 [Unit]
 Description=Ossuary Kiosk Browser
-After=ossuary-api.service graphical.target network-online.target
-Wants=graphical.target network-online.target
-Requisite=graphical.target
+After=ossuary-api.service ossuary-display.service network-online.target
+Wants=network-online.target
+Requisite=ossuary-display.service
 
 [Service]
 Type=exec
@@ -13,8 +13,6 @@ Restart=always
 RestartSec=10
 StandardOutput=journal
 StandardError=journal
-Environment=DISPLAY=:0
-# XAUTHORITY will be dynamically determined by the kiosk service
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/ossuary/src
 
@@ -22,4 +20,4 @@ Environment=PYTHONPATH=/opt/ossuary/src
 SupplementaryGroups=audio video input ossuary
 
 [Install]
-WantedBy=graphical.target
+WantedBy=multi-user.target

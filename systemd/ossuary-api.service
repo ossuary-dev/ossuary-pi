@@ -14,8 +14,6 @@ StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/ossuary/src
-Environment=DISPLAY=:0
-Environment=XAUTHORITY=/root/.Xauthority
 
 [Install]
 WantedBy=multi-user.target
