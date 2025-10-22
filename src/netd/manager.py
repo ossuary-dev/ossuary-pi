@@ -628,7 +628,7 @@ class NetworkManager:
         s_ip4.set_property(NM.SETTING_IP_CONFIG_METHOD, NM.SETTING_IP4_CONFIG_METHOD_SHARED)
 
         # Add static IP for the AP
-        addr = NM.IPAddress.new(4, self.ap_config.ip_address, 24, None)
+        addr = NM.IPAddress.new(4, self.ap_config.ip_address, 24)
         s_ip4.add_address(addr)
 
         connection.add_setting(s_ip4)

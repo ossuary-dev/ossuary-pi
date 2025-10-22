@@ -40,13 +40,15 @@ class KioskManager:
         try:
             self.logger.info("Initializing kiosk system")
 
-            # Initialize display first
-            if not await self.display_manager.initialize():
-                self.logger.error("Failed to initialize display")
-                return False
-
-            # Wait for display to stabilize
-            await asyncio.sleep(2)
+            # Initialize display first (optional for headless operation)
+            display_initialized = await self.display_manager.initialize()
+            if not display_initialized:
+                self.logger.warning("Failed to initialize display - running in headless mode")
+                self.headless_mode = True
+            else:
+                self.headless_mode = False
+                # Wait for display to stabilize
+                await asyncio.sleep(2)
 
             self.is_initialized = True
             self.logger.info("Kiosk system initialized successfully")
@@ -77,8 +79,13 @@ class KioskManager:
                 self.logger.info(f"Waiting {self.autostart_delay}s before starting browser")
                 await asyncio.sleep(self.autostart_delay)
 
-            # Start browser
-            if await self.browser_controller.start(target_url):
+            # Start browser (skip if in headless mode)
+            if hasattr(self, 'headless_mode') and self.headless_mode:
+                self.logger.info("Running in headless mode - browser not started")
+                self.is_running = True
+                self.current_url = target_url
+                return True
+            elif await self.browser_controller.start(target_url):
                 self.is_running = True
                 self.current_url = target_url
 

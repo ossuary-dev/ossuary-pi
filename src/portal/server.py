@@ -85,7 +85,9 @@ class PortalServer:
         )
 
         # CORS middleware
-        if config.portal.get("cors_enabled", True):
+        # Enable CORS by default (no cors_enabled field in PortalConfig)
+        cors_enabled = True  # Default to enabled
+        if cors_enabled:
             app.add_middleware(
                 CORSMiddleware,
                 allow_origins=["*"],
