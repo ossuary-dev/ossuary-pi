@@ -604,66 +604,29 @@ class NetworkManager:
         raise TimeoutError(f"Timeout waiting for network state {target_states}")
 
     async def start_access_point(self) -> bool:
-        """Start access point mode."""
+        """Start access point mode using modern nmcli approach."""
         try:
             self.logger.info(f"Starting access point: {self.ap_config.ssid}")
-
-            # First try the NetworkManager programmatic approach
-            try:
-                # Create AP connection
-                connection = self._create_ap_connection()
-
-                # Activate AP connection
-                self.nm_client.add_and_activate_connection_async(
-                    connection, self.wifi_device, None, None,
-                    self._ap_activation_callback, None
-                )
-
-                # Wait for AP to start
-                await asyncio.sleep(8)  # Give more time for AP to start
-                await self._update_network_state()
-
-                if self.current_state == NetworkState.AP_MODE:
-                    self.logger.info("Access point started successfully via NetworkManager API")
-                    return True
-                else:
-                    self.logger.warning("NetworkManager API approach failed, trying nmcli fallback")
-                    raise Exception("API method failed")
-
-            except Exception as api_error:
-                self.logger.warning(f"NetworkManager API failed: {api_error}")
-
-                # Fallback to nmcli command
-                return await self._start_ap_with_nmcli()
-
-        except Exception as e:
-            self.logger.error(f"All AP start methods failed: {e}")
-            raise AccessPointError(f"Failed to start access point: {e}")
-
-    async def _start_ap_with_nmcli(self) -> bool:
-        """Fallback method to start AP using nmcli command."""
-        try:
-            self.logger.info("Attempting to start AP using nmcli command")
-
-            import subprocess
 
             # Get WiFi device name
             device_name = self.wifi_device.get_iface() if self.wifi_device else "wlan0"
 
-            # Build nmcli command
+            # Clean up any existing AP connections first
+            await self._cleanup_existing_ap_connections()
+
+            # Use the modern nmcli wifi hotspot command (recommended for 2024)
             cmd = [
                 "nmcli", "device", "wifi", "hotspot",
                 "ifname", device_name,
                 "ssid", self.ap_config.ssid,
-                "band", "bg",
-                "channel", str(self.ap_config.channel)
+                "band", "bg"
             ]
 
-            # Add password if configured
+            # Add password if configured (if None, creates open network)
             if self.ap_config.password:
                 cmd.extend(["password", self.ap_config.password])
 
-            self.logger.info(f"Running command: {' '.join(cmd)}")
+            self.logger.info(f"Creating hotspot with command: {' '.join(cmd)}")
 
             # Execute nmcli command
             result = subprocess.run(
@@ -674,27 +637,117 @@ class NetworkManager:
             )
 
             if result.returncode == 0:
-                self.logger.info("nmcli hotspot command succeeded")
+                self.logger.info("Hotspot creation command succeeded")
+                hotspot_name = result.stdout.strip().split("'")[1] if "'" in result.stdout else "Hotspot"
+
+                # Configure the connection for proper captive portal operation
+                await self._configure_hotspot_connection(hotspot_name)
 
                 # Wait for AP to be fully active
                 await asyncio.sleep(5)
                 await self._update_network_state()
 
                 if self.current_state == NetworkState.AP_MODE:
-                    self.logger.info("Access point started successfully via nmcli")
+                    self.logger.info(f"Access point '{self.ap_config.ssid}' started successfully")
                     return True
                 else:
-                    self.logger.error("nmcli succeeded but AP not detected")
-                    return False
+                    self.logger.warning("Hotspot created but not detected as active")
+                    return True  # nmcli succeeded, trust it worked
+
             else:
-                self.logger.error(f"nmcli command failed: {result.stderr}")
+                self.logger.error(f"Hotspot creation failed: {result.stderr}")
+                if "already exists" in result.stderr:
+                    self.logger.info("Hotspot already exists, trying to activate it")
+                    return await self._activate_existing_hotspot()
                 return False
 
         except subprocess.TimeoutExpired:
-            self.logger.error("nmcli command timed out")
+            self.logger.error("Hotspot creation command timed out")
             return False
         except Exception as e:
-            self.logger.error(f"nmcli fallback failed: {e}")
+            self.logger.error(f"Hotspot creation failed: {e}")
+            return False
+
+    async def _cleanup_existing_ap_connections(self):
+        """Clean up any existing AP/hotspot connections."""
+        try:
+            # List all connections and find hotspot ones
+            result = subprocess.run(
+                ["nmcli", "connection", "show"],
+                capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if ('wifi' in line.lower() and
+                        ('hotspot' in line.lower() or self.ap_config.ssid in line)):
+
+                        connection_name = line.split()[0]
+                        self.logger.info(f"Cleaning up existing connection: {connection_name}")
+
+                        # Delete the connection
+                        subprocess.run(
+                            ["nmcli", "connection", "delete", connection_name],
+                            capture_output=True, timeout=10
+                        )
+
+        except Exception as e:
+            self.logger.debug(f"Connection cleanup failed (not critical): {e}")
+
+    async def _configure_hotspot_connection(self, connection_name: str):
+        """Configure the hotspot connection for proper operation."""
+        try:
+            # Configure IPv4 for shared method (enables DHCP server)
+            subprocess.run([
+                "nmcli", "connection", "modify", connection_name,
+                "ipv4.method", "shared",
+                "ipv4.address", f"{self.ap_config.ip_address}/24"
+            ], capture_output=True, timeout=10)
+
+            # Disable IPv6 for simplicity
+            subprocess.run([
+                "nmcli", "connection", "modify", connection_name,
+                "ipv6.method", "disabled"
+            ], capture_output=True, timeout=10)
+
+            # Set autoconnect to false (we manage this manually)
+            subprocess.run([
+                "nmcli", "connection", "modify", connection_name,
+                "connection.autoconnect", "false"
+            ], capture_output=True, timeout=10)
+
+            self.logger.info(f"Configured hotspot connection: {connection_name}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to configure hotspot connection: {e}")
+
+    async def _activate_existing_hotspot(self) -> bool:
+        """Activate an existing hotspot connection."""
+        try:
+            # Find and activate hotspot connection
+            result = subprocess.run(
+                ["nmcli", "connection", "show"],
+                capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if self.ap_config.ssid in line:
+                        connection_name = line.split()[0]
+                        self.logger.info(f"Activating existing hotspot: {connection_name}")
+
+                        result = subprocess.run([
+                            "nmcli", "connection", "up", connection_name
+                        ], capture_output=True, text=True, timeout=15)
+
+                        return result.returncode == 0
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to activate existing hotspot: {e}")
             return False
 
     def _create_ap_connection(self) -> NM.Connection:
@@ -753,72 +806,73 @@ class NetworkManager:
             self.logger.error(f"AP activation callback error: {e}")
 
     async def stop_access_point(self) -> bool:
-        """Stop access point mode."""
+        """Stop access point mode using nmcli."""
         try:
             self.logger.info("Stopping access point")
 
-            # Try to find and deactivate AP connection using NetworkManager API
+            # Find and stop all hotspot connections
             ap_stopped = False
-            for connection in self.nm_client.get_active_connections():
-                nm_connection = connection.get_connection()
-                if self._is_ap_connection(nm_connection):
-                    try:
-                        self.nm_client.deactivate_connection_async(
-                            connection, None, self._deactivation_callback, None
-                        )
-                        ap_stopped = True
-                        self.logger.info("AP deactivation initiated via NetworkManager API")
-                        break
-                    except Exception as e:
-                        self.logger.warning(f"Failed to deactivate AP via API: {e}")
 
-            # If API method didn't work, try nmcli approach
+            # Get all active connections and stop hotspot ones
+            result = subprocess.run(
+                ["nmcli", "connection", "show", "--active"],
+                capture_output=True, text=True, timeout=10
+            )
+
+            if result.returncode == 0:
+                lines = result.stdout.split('\n')
+                for line in lines:
+                    if ('wifi' in line.lower() and
+                        ('hotspot' in line.lower() or self.ap_config.ssid in line)):
+
+                        connection_name = line.split()[0]
+                        self.logger.info(f"Stopping hotspot connection: {connection_name}")
+
+                        # Stop the connection
+                        result = subprocess.run([
+                            "nmcli", "connection", "down", connection_name
+                        ], capture_output=True, text=True, timeout=10)
+
+                        if result.returncode == 0:
+                            ap_stopped = True
+                            self.logger.info(f"Successfully stopped: {connection_name}")
+
+                            # Also delete the connection to clean up
+                            subprocess.run([
+                                "nmcli", "connection", "delete", connection_name
+                            ], capture_output=True, timeout=10)
+
+            # Also check for any connections with our SSID name
             if not ap_stopped:
-                self.logger.info("Trying to stop AP using nmcli")
-                try:
-                    # Find hotspot connections and remove them
-                    result = subprocess.run(
-                        ["nmcli", "connection", "show", "--active"],
-                        capture_output=True, text=True, timeout=10
-                    )
+                result = subprocess.run(
+                    ["nmcli", "connection", "show"],
+                    capture_output=True, text=True, timeout=10
+                )
 
-                    if result.returncode == 0:
-                        lines = result.stdout.split('\n')
-                        for line in lines:
-                            if 'wifi' in line and ('hotspot' in line or self.ap_config.ssid in line):
-                                connection_name = line.split()[0]
-                                self.logger.info(f"Stopping hotspot connection: {connection_name}")
+                if result.returncode == 0:
+                    lines = result.stdout.split('\n')
+                    for line in lines:
+                        if self.ap_config.ssid in line:
+                            connection_name = line.split()[0]
+                            self.logger.info(f"Deleting connection: {connection_name}")
 
-                                # Stop the connection
-                                subprocess.run(
-                                    ["nmcli", "connection", "down", connection_name],
-                                    capture_output=True, timeout=10
-                                )
-
-                                # Delete the connection to clean up
-                                subprocess.run(
-                                    ["nmcli", "connection", "delete", connection_name],
-                                    capture_output=True, timeout=10
-                                )
-                                ap_stopped = True
-                                break
-
-                except Exception as e:
-                    self.logger.warning(f"nmcli stop method failed: {e}")
+                            subprocess.run([
+                                "nmcli", "connection", "delete", connection_name
+                            ], capture_output=True, timeout=10)
+                            ap_stopped = True
 
             await asyncio.sleep(3)  # Give time to stop
             await self._update_network_state()
 
-            if self.current_state != NetworkState.AP_MODE:
+            if ap_stopped or self.current_state != NetworkState.AP_MODE:
                 self.logger.info("Access point stopped successfully")
                 return True
             else:
-                self.logger.warning("AP may still be active, will continue anyway")
-                return True  # Don't fail completely if stop detection fails
+                self.logger.warning("No active hotspot found to stop")
+                return True  # Not an error if no hotspot was running
 
         except Exception as e:
-            self.logger.error(f"AP stop error: {e}")
-            # Don't raise exception - try to continue with normal operation
+            self.logger.error(f"Failed to stop access point: {e}")
             return False
 
     def _deactivation_callback(self, client, result, user_data):
