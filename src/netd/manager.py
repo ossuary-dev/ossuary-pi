@@ -849,18 +849,25 @@ class NetworkManager:
             }
 
     async def enable_ap_mode(self) -> bool:
-        """Enable AP mode temporarily (will revert on reboot)."""
+        """Enable persistent AP mode."""
         try:
-            self.logger.info("Enabling temporary AP mode for testing")
+            self.logger.info("Enabling persistent AP mode")
 
-            # Store current connection to restore later
+            # Store current connection info for potential restore later
             await self._store_current_connection()
+
+            # Disconnect from any current WiFi networks first
+            await self._disconnect_all_wifi()
+
+            # Disable auto-connect on known connections to prevent reconnection
+            await self._disable_autoconnect_on_known_networks()
 
             # Start AP mode
             success = await self.start_access_point()
 
             if success:
-                self.logger.info("AP mode enabled - will revert on reboot")
+                self.ap_state = APState.ACTIVE
+                self.logger.info("Persistent AP mode enabled - will stay active until manually disabled")
                 return True
             else:
                 self.logger.error("Failed to enable AP mode")
@@ -871,7 +878,7 @@ class NetworkManager:
             return False
 
     async def disable_ap_mode(self) -> bool:
-        """Disable AP mode and restore previous connection."""
+        """Disable AP mode and restore normal WiFi operation."""
         try:
             self.logger.info("Disabling AP mode")
 
@@ -879,9 +886,21 @@ class NetworkManager:
             success = await self.stop_access_point()
 
             if success:
+                self.ap_state = APState.INACTIVE
+
+                # Re-enable auto-connect on known networks
+                await self._enable_autoconnect_on_known_networks()
+
                 # Try to restore previous connection
                 await self._restore_previous_connection()
-                self.logger.info("AP mode disabled, restored previous connection")
+
+                # Clean up the marker file since we're manually disabling
+                try:
+                    Path("/tmp/ossuary_ap_test_mode").unlink(missing_ok=True)
+                except:
+                    pass
+
+                self.logger.info("AP mode disabled, restored normal WiFi operation")
                 return True
             else:
                 self.logger.error("Failed to disable AP mode")
@@ -894,7 +913,7 @@ class NetworkManager:
     async def _store_current_connection(self):
         """Store current connection info to restore later."""
         try:
-            # Create a temporary marker file to remember we were in test mode
+            # Create a marker file to track AP mode state
             marker_file = Path("/tmp/ossuary_ap_test_mode")
 
             # Get current active connection if any
@@ -910,10 +929,11 @@ class NetworkManager:
                             current_ssid = ssid_bytes.get_data().decode('utf-8')
                             break
 
-            # Store connection info
+            # Store connection info with manual flag
             marker_data = {
                 "previous_ssid": current_ssid,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().isoformat(),
+                "manual_activation": True  # This indicates manual AP mode, not auto-fallback
             }
 
             import json
@@ -961,13 +981,13 @@ class NetworkManager:
                 pass
 
     async def _cleanup_temporary_ap_mode(self):
-        """Clean up temporary AP mode after reboot."""
+        """Clean up AP mode after reboot and restore normal WiFi."""
         try:
             from pathlib import Path
             marker_file = Path("/tmp/ossuary_ap_test_mode")
 
             if marker_file.exists():
-                self.logger.info("Found temporary AP mode marker - system was rebooted while in test mode")
+                self.logger.info("Found AP mode marker - system was rebooted while in AP mode")
 
                 import json
                 try:
@@ -976,14 +996,19 @@ class NetworkManager:
 
                     previous_ssid = marker_data.get("previous_ssid")
                     timestamp = marker_data.get("timestamp")
+                    manual_activation = marker_data.get("manual_activation", False)
 
-                    self.logger.info(f"AP test mode was active since {timestamp}")
+                    self.logger.info(f"AP mode was active since {timestamp} (manual: {manual_activation})")
 
-                    if previous_ssid:
+                    # Re-enable auto-connect on all known networks
+                    await self._enable_autoconnect_on_known_networks()
+
+                    # Only try to restore specific connection if there was one and it was manual AP mode
+                    if previous_ssid and manual_activation:
                         self.logger.info(f"Attempting to restore previous connection to: {previous_ssid}")
 
                         # Small delay to let NetworkManager settle after boot
-                        await asyncio.sleep(2)
+                        await asyncio.sleep(5)
 
                         # Try to connect to the previous network
                         try:
@@ -993,14 +1018,16 @@ class NetworkManager:
                             self.logger.warning(f"Failed to restore connection to {previous_ssid}: {e}")
                             self.logger.info("Will continue with normal network auto-connection")
                     else:
-                        self.logger.info("No previous connection to restore, using auto-connect")
+                        self.logger.info("Using normal auto-connect behavior after reboot")
 
                 except json.JSONDecodeError:
                     self.logger.warning("Corrupted AP mode marker file")
+                    # Still re-enable auto-connect even if marker is corrupted
+                    await self._enable_autoconnect_on_known_networks()
 
                 # Always clean up the marker file
                 marker_file.unlink()
-                self.logger.info("Cleaned up temporary AP mode marker")
+                self.logger.info("Cleaned up AP mode marker")
 
         except Exception as e:
             self.logger.debug(f"AP cleanup check failed (normal if no marker): {e}")
@@ -1009,3 +1036,79 @@ class NetworkManager:
                 Path("/tmp/ossuary_ap_test_mode").unlink(missing_ok=True)
             except:
                 pass
+
+    async def _disconnect_all_wifi(self):
+        """Disconnect from all current WiFi connections."""
+        try:
+            self.logger.info("Disconnecting from all WiFi networks")
+
+            active_connections = []
+            for connection in self.nm_client.get_active_connections():
+                nm_connection = connection.get_connection()
+                # Only disconnect regular WiFi connections, not AP connections
+                if (nm_connection.get_connection_type() == "802-11-wireless" and
+                    not self._is_ap_connection(nm_connection)):
+                    active_connections.append(connection)
+
+            for connection in active_connections:
+                try:
+                    self.nm_client.deactivate_connection_async(
+                        connection, None, None, None
+                    )
+                    self.logger.info(f"Disconnected from {connection.get_id()}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to disconnect from {connection.get_id()}: {e}")
+
+            # Give time for disconnections to complete
+            await asyncio.sleep(2)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to disconnect all WiFi: {e}")
+
+    async def _disable_autoconnect_on_known_networks(self):
+        """Disable auto-connect on all known WiFi networks to prevent reconnection."""
+        try:
+            self.logger.info("Disabling auto-connect on known networks")
+
+            # Get all saved connections
+            connections = self.nm_client.get_connections()
+
+            for connection in connections:
+                if (connection.get_connection_type() == "802-11-wireless" and
+                    not self._is_ap_connection(connection)):
+                    # Disable auto-connect
+                    s_con = connection.get_setting_connection()
+                    if s_con and s_con.get_autoconnect():
+                        s_con.set_property(NM.SETTING_CONNECTION_AUTOCONNECT, False)
+                        try:
+                            connection.commit_changes(True, None)
+                            self.logger.debug(f"Disabled auto-connect for {connection.get_id()}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to disable auto-connect for {connection.get_id()}: {e}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to disable auto-connect on networks: {e}")
+
+    async def _enable_autoconnect_on_known_networks(self):
+        """Re-enable auto-connect on known WiFi networks."""
+        try:
+            self.logger.info("Re-enabling auto-connect on known networks")
+
+            # Get all saved connections
+            connections = self.nm_client.get_connections()
+
+            for connection in connections:
+                if (connection.get_connection_type() == "802-11-wireless" and
+                    not self._is_ap_connection(connection)):
+                    # Re-enable auto-connect
+                    s_con = connection.get_setting_connection()
+                    if s_con and not s_con.get_autoconnect():
+                        s_con.set_property(NM.SETTING_CONNECTION_AUTOCONNECT, True)
+                        try:
+                            connection.commit_changes(True, None)
+                            self.logger.debug(f"Re-enabled auto-connect for {connection.get_id()}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to re-enable auto-connect for {connection.get_id()}: {e}")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to re-enable auto-connect on networks: {e}")

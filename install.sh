@@ -1240,7 +1240,7 @@ cleanup_previous_install() {
     print_step "Checking for previous installation remnants..."
 
     # Stop any running services quietly
-    local services=("ossuary-kiosk" "ossuary-portal" "ossuary-api" "ossuary-netd" "ossuary-config")
+    local services=("ossuary-kiosk" "ossuary-display" "ossuary-portal" "ossuary-api" "ossuary-netd" "ossuary-config")
     for service in "${services[@]}"; do
         if systemctl is-active "$service" &>/dev/null; then
             print_step "Stopping existing $service service..."
@@ -1401,7 +1401,7 @@ cleanup_on_error() {
     print_step "Cleaning up partial installation..."
 
     # Stop any services that might have been started
-    for service in ossuary-config ossuary-netd ossuary-api ossuary-portal ossuary-kiosk; do
+    for service in ossuary-config ossuary-netd ossuary-api ossuary-portal ossuary-display ossuary-kiosk; do
         systemctl stop "$service" 2>/dev/null || true
         systemctl disable "$service" 2>/dev/null || true
     done
