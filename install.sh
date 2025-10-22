@@ -746,8 +746,17 @@ install_ossuary() {
     fi
 
     if [[ -d "$source_dir/scripts/bin" ]] && [[ -n "$(ls -A "$source_dir/scripts/bin" 2>/dev/null)" ]]; then
+        print_step "Copying binary files (FORCE UPDATE)..."
         cp -rf "$source_dir/scripts/bin/"* "$INSTALL_DIR/bin/" || { print_error "Failed to copy bin files"; exit 1; }
-        print_step "Updated binary files"
+        print_success "Updated binary files including display service"
+
+        # Specifically check that display service binary exists
+        if [[ -f "$INSTALL_DIR/bin/ossuary-display" ]]; then
+            print_success "✓ Display service binary installed"
+        else
+            print_error "✗ Display service binary MISSING!"
+            exit 1
+        fi
     elif [[ -d "$source_dir/scripts/bin" ]]; then
         print_warning "Source scripts/bin directory is empty, skipping"
     else
@@ -756,7 +765,12 @@ install_ossuary() {
 
     if [[ -f "$source_dir/scripts/ossuaryctl" ]]; then
         mkdir -p "$BIN_DIR"
-        cp "$source_dir/scripts/ossuaryctl" "$BIN_DIR/" || { print_error "Failed to copy ossuaryctl"; exit 1; }
+        print_step "Copying ossuaryctl (FORCE UPDATE)..."
+        cp -f "$source_dir/scripts/ossuaryctl" "$BIN_DIR/" || { print_error "Failed to copy ossuaryctl"; exit 1; }
+        print_success "ossuaryctl updated with display service support"
+    else
+        print_error "ossuaryctl not found in $source_dir/scripts/"
+        exit 1
     fi
 
     if [[ -f "$source_dir/scripts/monitor.sh" ]]; then
@@ -1661,6 +1675,42 @@ EOF
     print_success "Post-install operations scheduled"
 }
 
+run_installation_verification() {
+    print_step "Running installation verification..."
+
+    # Copy verification script if it exists
+    local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$script_dir/verify-install.sh" ]]; then
+        cp "$script_dir/verify-install.sh" /tmp/verify-install.sh
+        chmod +x /tmp/verify-install.sh
+
+        # Run verification
+        if /tmp/verify-install.sh; then
+            print_success "Installation verification PASSED"
+        else
+            print_error "Installation verification FAILED"
+            print_error "Critical components may be missing or misconfigured"
+            echo ""
+            echo "This means the installation is incomplete. Common issues:"
+            echo "  • Display service not properly installed"
+            echo "  • ossuaryctl missing display service"
+            echo "  • Service files not copied correctly"
+            echo ""
+            read -p "Continue anyway? (y/N): " -n 1 -r
+            echo
+            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                print_error "Installation aborted due to verification failure"
+                exit 1
+            fi
+        fi
+
+        # Clean up
+        rm -f /tmp/verify-install.sh
+    else
+        print_warning "Verification script not found, skipping verification"
+    fi
+}
+
 ask_post_install_reboot() {
     echo ""
     echo -e "${GREEN}================================================${NC}"
@@ -1767,6 +1817,9 @@ main() {
 
     # Schedule SSH-breaking operations for post-install
     schedule_post_install_operations
+
+    # Verify installation is complete and correct
+    run_installation_verification
 
     # Cleanup and completion
     cleanup
