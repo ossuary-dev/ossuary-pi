@@ -1,5 +1,5 @@
 #!/bin/bash
-"""Ossuary Pi Uninstaller Script."""
+# Ossuary Pi Uninstaller Script
 
 set -e
 

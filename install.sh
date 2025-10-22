@@ -1,5 +1,5 @@
 #!/bin/bash
-"""Ossuary Pi Installation Script."""
+# Ossuary Pi Installation Script
 
 set -e
 
@@ -770,6 +770,29 @@ create_default_config() {
     print_success "Default configuration created"
 }
 
+cleanup_previous_install() {
+    print_step "Checking for previous installation remnants..."
+
+    # Stop any running services quietly
+    local services=("ossuary-kiosk" "ossuary-portal" "ossuary-api" "ossuary-netd" "ossuary-config")
+    for service in "${services[@]}"; do
+        if systemctl is-active "$service" &>/dev/null; then
+            print_step "Stopping existing $service service..."
+            systemctl stop "$service" || true
+        fi
+    done
+
+    # Fix any broken package installations
+    print_step "Fixing any broken package installations..."
+    dpkg --configure -a || true
+    apt-get install -f || true
+
+    # Clear package cache to avoid conflicts
+    apt-get clean || true
+
+    print_success "Previous installation cleanup completed"
+}
+
 cleanup() {
     print_step "Cleaning up..."
 
@@ -877,6 +900,9 @@ main() {
         exit 1
     fi
     print_success "Internet connectivity confirmed"
+
+    # Clean up any previous installation remnants
+    cleanup_previous_install
 
     # System preparation
     update_system

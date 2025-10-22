@@ -1,5 +1,5 @@
 #!/bin/bash
-"""Quick installer for Ossuary Pi - downloads and runs full installer."""
+# Quick installer for Ossuary Pi - downloads and runs full installer
 
 set -e
 
