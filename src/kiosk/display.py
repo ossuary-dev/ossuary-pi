@@ -22,9 +22,11 @@ class DisplayManager:
         self.x_server_process: Optional[subprocess.Popen] = None
         self.window_manager_process: Optional[subprocess.Popen] = None
 
-        # Detect display system
+        # Detect display system and desktop environment
         self.is_wayland = self._detect_wayland()
+        self.is_desktop_environment = self._detect_desktop_environment()
         self.logger.info(f"Display system: {'Wayland' if self.is_wayland else 'X11'}")
+        self.logger.info(f"Desktop environment detected: {self.is_desktop_environment}")
 
         # Display settings
         self.rotation = config.get("rotation", 0)
@@ -60,11 +62,53 @@ class DisplayManager:
         except Exception:
             return False
 
+    def _detect_desktop_environment(self) -> bool:
+        """Detect if we're running on an existing desktop environment."""
+        try:
+            # Check if graphical.target is active (desktop environment)
+            result = subprocess.run(
+                ["systemctl", "is-active", "--quiet", "graphical.target"],
+                capture_output=True, timeout=5
+            )
+            if result.returncode == 0:
+                # Check for common display managers
+                display_managers = ["lightdm", "gdm", "sddm", "lxdm", "xdm"]
+                for dm in display_managers:
+                    result = subprocess.run(
+                        ["pgrep", "-f", dm],
+                        capture_output=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        self.logger.info(f"Desktop environment detected: {dm} is running")
+                        return True
+
+                # Check for desktop session processes
+                desktop_processes = ["lxsession", "gnome-session", "plasma", "xfce4-session", "mate-session"]
+                for process in desktop_processes:
+                    result = subprocess.run(
+                        ["pgrep", "-f", process],
+                        capture_output=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        self.logger.info(f"Desktop environment detected: {process} is running")
+                        return True
+
+            return False
+        except Exception as e:
+            self.logger.debug(f"Failed to detect desktop environment: {e}")
+            return False
+
     async def initialize(self) -> bool:
         """Initialize display system."""
         try:
             self.logger.info("Initializing display system")
 
+            # If desktop environment is running, use it passively
+            if self.is_desktop_environment:
+                self.logger.info("Desktop environment detected - using existing display session")
+                return await self._initialize_passive()
+
+            # Otherwise initialize our own display system for headless kiosk
             if self.is_wayland:
                 return await self._initialize_wayland()
             else:
@@ -73,6 +117,44 @@ class DisplayManager:
         except Exception as e:
             self.logger.error(f"Failed to initialize display: {e}")
             return False
+
+    async def _initialize_passive(self) -> bool:
+        """Initialize passively using existing desktop environment."""
+        try:
+            self.logger.info("Initializing passive display mode")
+
+            # Verify we can access the display
+            if self.is_wayland:
+                if not await self._is_wayland_running():
+                    self.logger.error("Wayland compositor not accessible")
+                    return False
+                self.logger.info("Using existing Wayland session")
+            else:
+                if not await self._is_x_server_running():
+                    self.logger.error("X server not accessible")
+                    return False
+                self.logger.info("Using existing X11 session")
+
+            # Only apply minimal configuration that won't interfere
+            await self._apply_passive_config()
+
+            self.logger.info("Passive display initialization complete")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize passive display: {e}")
+            return False
+
+    async def _apply_passive_config(self) -> None:
+        """Apply minimal configuration that won't interfere with desktop."""
+        try:
+            # Only disable screen blanking - don't change resolution, rotation, etc.
+            if not self.is_wayland:
+                env = {"DISPLAY": self.display}
+                await self._disable_screen_blanking(env)
+                self.logger.info("Applied passive display configuration (screen blanking disabled)")
+        except Exception as e:
+            self.logger.debug(f"Failed to apply passive config: {e}")
 
     async def _initialize_wayland(self) -> bool:
         """Initialize Wayland display."""
@@ -488,23 +570,30 @@ class DisplayManager:
         try:
             self.logger.info("Shutting down display system")
 
-            # Stop window manager
+            # If we're using a desktop environment, don't shut anything down
+            if self.is_desktop_environment:
+                self.logger.info("Desktop environment mode - skipping display shutdown")
+                return
+
+            # Stop window manager only if we started it
             if self.window_manager_process:
                 try:
                     self.window_manager_process.terminate()
                     await asyncio.sleep(2)
                     if self.window_manager_process.poll() is None:
                         self.window_manager_process.kill()
+                    self.logger.info("Stopped window manager")
                 except Exception as e:
                     self.logger.debug(f"Failed to stop window manager: {e}")
 
-            # Stop X server if we started it
+            # Stop X server only if we started it
             if self.x_server_process:
                 try:
                     self.x_server_process.terminate()
                     await asyncio.sleep(2)
                     if self.x_server_process.poll() is None:
                         self.x_server_process.kill()
+                    self.logger.info("Stopped X server")
                 except Exception as e:
                     self.logger.debug(f"Failed to stop X server: {e}")
 
@@ -513,6 +602,11 @@ class DisplayManager:
 
     async def restart_x_server(self) -> bool:
         """Restart X server."""
+        # Don't restart if using desktop environment
+        if self.is_desktop_environment:
+            self.logger.warning("Cannot restart X server - desktop environment is running")
+            return False
+
         await self.shutdown()
         await asyncio.sleep(3)
         return await self.initialize()
