@@ -26,7 +26,13 @@ class ConfigFileHandler(FileSystemEventHandler):
         """Handle file modification events."""
         if not event.is_directory and event.src_path == str(self.config_manager.config_path):
             self.logger.info("Configuration file changed, reloading")
-            asyncio.create_task(self.config_manager._handle_file_change())
+            try:
+                loop = asyncio.get_running_loop()
+                loop.call_soon_threadsafe(
+                    lambda: asyncio.create_task(self.config_manager._handle_file_change())
+                )
+            except RuntimeError:
+                self.logger.warning("No running event loop, skipping file change handling")
 
 
 class ConfigManager:

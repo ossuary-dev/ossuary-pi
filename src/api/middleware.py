@@ -36,6 +36,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if request.url.path in self.public_paths:
                 return await call_next(request)
 
+            # Skip authentication for WebSocket paths
+            if request.url.path.startswith("/ws"):
+                return await call_next(request)
+
             # Skip authentication for static files
             if request.url.path.startswith("/assets/"):
                 return await call_next(request)

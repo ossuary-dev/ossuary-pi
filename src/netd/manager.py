@@ -187,44 +187,40 @@ class NetworkManager:
 
     def _setup_signal_handlers(self) -> None:
         """Set up NetworkManager signal handlers."""
-        try:
-            # Try modern signal name first
-            self.nm_client.connect('device-state-changed', self._on_device_state_changed)
-        except Exception as e:
-            self.logger.debug(f"Modern signal failed: {e}")
-            try:
-                # Try legacy signal name
-                self.nm_client.connect('device_state_changed', self._on_device_state_changed)
-            except Exception as e2:
-                self.logger.warning(f"Failed to connect device state signal: {e2}")
+        if not self.nm_client:
+            self.logger.warning("No NetworkManager client available for signal handlers")
+            return
 
-        if self.wifi_device:
+        # Set up device state change monitoring via polling instead of signals
+        # NetworkManager GI signals can be unreliable on some systems
+        self.logger.info("Setting up NetworkManager monitoring via polling (signals disabled)")
+
+        # Start background monitoring task
+        asyncio.create_task(self._monitor_network_state())
+
+    async def _monitor_network_state(self) -> None:
+        """Monitor network state changes via polling."""
+        previous_state = None
+
+        while True:
             try:
-                self.wifi_device.connect('access-point-added', self._on_access_point_added)
-                self.wifi_device.connect('access-point-removed', self._on_access_point_removed)
+                await self._update_network_state()
+
+                # Check for state changes
+                if self.current_state != previous_state:
+                    self.logger.debug(f"Network state change detected: {previous_state} -> {self.current_state}")
+                    previous_state = self.current_state
+
+                # Poll every 5 seconds
+                await asyncio.sleep(5)
+
+            except asyncio.CancelledError:
+                self.logger.info("Network monitoring stopped")
+                break
             except Exception as e:
-                self.logger.debug(f"WiFi signal handlers failed: {e}")
-                try:
-                    # Try legacy signal names
-                    self.wifi_device.connect('access_point_added', self._on_access_point_added)
-                    self.wifi_device.connect('access_point_removed', self._on_access_point_removed)
-                except Exception as e2:
-                    self.logger.warning(f"Failed to connect WiFi signals: {e2}")
-        else:
-            self.logger.debug("No WiFi device available - skipping WiFi signal handlers")
+                self.logger.error(f"Network monitoring error: {e}")
+                await asyncio.sleep(10)  # Wait longer on error
 
-    def _on_device_state_changed(self, client, device, new_state, old_state, reason):
-        """Handle device state changes."""
-        if self.wifi_device and device == self.wifi_device:
-            asyncio.create_task(self._update_network_state())
-
-    def _on_access_point_added(self, device, access_point):
-        """Handle new access point discovered."""
-        self.logger.debug(f"Access point added: {access_point.get_ssid()}")
-
-    def _on_access_point_removed(self, device, access_point):
-        """Handle access point removed."""
-        self.logger.debug(f"Access point removed: {access_point.get_ssid()}")
 
     async def get_status(self) -> NetworkStatus:
         """Get current network status."""

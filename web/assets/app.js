@@ -3,7 +3,7 @@
 class OssuaryPortal {
     constructor() {
         this.api = '/api/v1';
-        this.wsUrl = `ws://${window.location.host}/ws/events`;
+        this.wsUrl = `ws://${window.location.host}/ws`;
         this.ws = null;
         this.networks = [];
         this.selectedNetwork = null;
