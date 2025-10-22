@@ -681,23 +681,32 @@ EOF
 configure_display() {
     print_step "Configuring display system..."
 
-    # Configure autologin for ossuary user
-    mkdir -p "/etc/systemd/system/getty@tty1.service.d"
+    # Check if we're on a desktop environment
+    if systemctl is-active --quiet graphical.target && pgrep -f "lightdm|gdm|sddm|lxdm" > /dev/null; then
+        print_warning "Desktop environment detected - skipping autologin configuration"
+        print_step "Ossuary will work with existing desktop session"
+    else
+        print_step "Configuring headless kiosk autologin"
+        # Configure autologin for ossuary user
+        mkdir -p "/etc/systemd/system/getty@tty1.service.d"
 
-    if [[ -f "/etc/systemd/system/getty@tty1.service.d/autologin.conf" ]]; then
-        print_warning "Autologin configuration already exists, backing up"
-        cp "/etc/systemd/system/getty@tty1.service.d/autologin.conf" "/etc/systemd/system/getty@tty1.service.d/autologin.conf.backup"
-    fi
+        if [[ -f "/etc/systemd/system/getty@tty1.service.d/autologin.conf" ]]; then
+            print_warning "Autologin configuration already exists, backing up"
+            cp "/etc/systemd/system/getty@tty1.service.d/autologin.conf" "/etc/systemd/system/getty@tty1.service.d/autologin.conf.backup"
+        fi
 
-    cat > "/etc/systemd/system/getty@tty1.service.d/autologin.conf" << EOF
+        cat > "/etc/systemd/system/getty@tty1.service.d/autologin.conf" << EOF
 [Service]
 ExecStart=
 ExecStart=-/sbin/agetty --autologin $OSSUARY_USER --noclear %I \$TERM
 EOF
+    fi
 
-    # Configure X11 for ossuary user
-    if [[ -d "$OSSUARY_HOME" ]] && [[ ! -f "$OSSUARY_HOME/.xinitrc" ]]; then
-        cat > "$OSSUARY_HOME/.xinitrc" << 'EOF'
+    # Configure X11 for ossuary user (only for headless setups)
+    if ! systemctl is-active --quiet graphical.target || ! pgrep -f "lightdm|gdm|sddm|lxdm" > /dev/null; then
+        if [[ -d "$OSSUARY_HOME" ]] && [[ ! -f "$OSSUARY_HOME/.xinitrc" ]]; then
+            print_step "Setting up X11 configuration for headless mode"
+            cat > "$OSSUARY_HOME/.xinitrc" << 'EOF'
 #!/bin/bash
 # Disable screensaver and power management
 xset s off
@@ -710,20 +719,24 @@ unclutter -idle 1 -root &
 # Start window manager
 exec openbox-session
 EOF
-        chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.xinitrc"
-        chmod +x "$OSSUARY_HOME/.xinitrc"
+            chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.xinitrc"
+            chmod +x "$OSSUARY_HOME/.xinitrc"
 
-        # Set up automatic X11 startup in .bashrc
-        if [[ ! -f "$OSSUARY_HOME/.bashrc" ]] || ! grep -q "startx" "$OSSUARY_HOME/.bashrc"; then
-            cat >> "$OSSUARY_HOME/.bashrc" << 'EOF'
+            # Set up automatic X11 startup in .bashrc
+            if [[ ! -f "$OSSUARY_HOME/.bashrc" ]] || ! grep -q "startx" "$OSSUARY_HOME/.bashrc"; then
+                cat >> "$OSSUARY_HOME/.bashrc" << 'EOF'
 
 # Auto-start X11 on login to tty1
 if [[ -z $DISPLAY && $(tty) = /dev/tty1 ]]; then
     startx
 fi
 EOF
-            chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.bashrc"
+                chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.bashrc"
+            fi
         fi
+    else
+        print_step "Desktop environment detected - skipping X11 auto-start configuration"
+    fi
 
         # Set up X authority permissions
         if [[ ! -f "$OSSUARY_HOME/.Xauthority" ]]; then
