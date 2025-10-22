@@ -48,6 +48,8 @@ REQUIRED_PACKAGES=(
     "gir1.2-nm-1.0"
     "xinit"
     "xserver-xorg-legacy"
+    "x11-utils"
+    "x11-xserver-utils"
 )
 
 print_banner() {

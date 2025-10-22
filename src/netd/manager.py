@@ -153,9 +153,14 @@ class NetworkManager:
             else:
                 self._init_gi_client()
 
-            # Set up signal handlers (if using GI)
+            # Set up signal handlers (if using GI) - optional
             if not self.use_sdbus:
-                self._setup_signal_handlers()
+                try:
+                    self._setup_signal_handlers()
+                    self.logger.debug("Signal handlers set up successfully")
+                except Exception as e:
+                    self.logger.warning(f"Failed to set up signal handlers: {e}")
+                    self.logger.info("Continuing without signal handlers - functionality may be limited")
 
             # Check current state
             await self._update_network_state()
@@ -182,10 +187,29 @@ class NetworkManager:
 
     def _setup_signal_handlers(self) -> None:
         """Set up NetworkManager signal handlers."""
-        self.nm_client.connect('device-state-changed', self._on_device_state_changed)
+        try:
+            # Try modern signal name first
+            self.nm_client.connect('device-state-changed', self._on_device_state_changed)
+        except Exception as e:
+            self.logger.debug(f"Modern signal failed: {e}")
+            try:
+                # Try legacy signal name
+                self.nm_client.connect('device_state_changed', self._on_device_state_changed)
+            except Exception as e2:
+                self.logger.warning(f"Failed to connect device state signal: {e2}")
+
         if self.wifi_device:
-            self.wifi_device.connect('access-point-added', self._on_access_point_added)
-            self.wifi_device.connect('access-point-removed', self._on_access_point_removed)
+            try:
+                self.wifi_device.connect('access-point-added', self._on_access_point_added)
+                self.wifi_device.connect('access-point-removed', self._on_access_point_removed)
+            except Exception as e:
+                self.logger.debug(f"WiFi signal handlers failed: {e}")
+                try:
+                    # Try legacy signal names
+                    self.wifi_device.connect('access_point_added', self._on_access_point_added)
+                    self.wifi_device.connect('access_point_removed', self._on_access_point_removed)
+                except Exception as e2:
+                    self.logger.warning(f"Failed to connect WiFi signals: {e2}")
         else:
             self.logger.debug("No WiFi device available - skipping WiFi signal handlers")
 
