@@ -388,48 +388,36 @@ install_packages() {
 }
 
 create_user() {
-    print_step "Creating Ossuary user..."
+    print_step "Checking user configuration..."
 
+    # Services now run as root, but we still create the ossuary user for reference
     if id "$OSSUARY_USER" &>/dev/null; then
-        print_warning "User $OSSUARY_USER already exists"
+        print_step "User $OSSUARY_USER already exists"
     else
-        # Create user with home directory
+        # Create user with home directory for compatibility
         if useradd -m -s /bin/bash "$OSSUARY_USER"; then
-            print_success "Created user $OSSUARY_USER"
+            print_success "Created user $OSSUARY_USER (for reference)"
         else
-            print_error "Failed to create user $OSSUARY_USER"
-            exit 1
+            print_warning "Failed to create user $OSSUARY_USER (continuing anyway)"
         fi
     fi
 
     # Add user to required groups (only if they exist)
-    local groups_to_add=()
-    for group in video audio input netdev gpio; do
-        if getent group "$group" &>/dev/null; then
-            groups_to_add+=("$group")
-        else
-            print_warning "Group $group does not exist, skipping"
-        fi
-    done
+    if id "$OSSUARY_USER" &>/dev/null; then
+        local groups_to_add=()
+        for group in video audio input netdev gpio; do
+            if getent group "$group" &>/dev/null; then
+                groups_to_add+=("$group")
+            fi
+        done
 
-    if [[ ${#groups_to_add[@]} -gt 0 ]]; then
-        local group_list=$(IFS=,; echo "${groups_to_add[*]}")
-        usermod -a -G "$group_list" "$OSSUARY_USER" || print_warning "Failed to add user to some groups"
+        if [[ ${#groups_to_add[@]} -gt 0 ]]; then
+            local group_list=$(IFS=,; echo "${groups_to_add[*]}")
+            usermod -a -G "$group_list" "$OSSUARY_USER" 2>/dev/null || true
+        fi
     fi
 
-    # Set up sudo access for specific commands
-    mkdir -p "/etc/sudoers.d"
-    cat > "/etc/sudoers.d/ossuary" << 'EOF'
-# Allow ossuary user to manage system services and network
-ossuary ALL=(ALL) NOPASSWD: /bin/systemctl restart ossuary-*
-ossuary ALL=(ALL) NOPASSWD: /bin/systemctl start ossuary-*
-ossuary ALL=(ALL) NOPASSWD: /bin/systemctl stop ossuary-*
-ossuary ALL=(ALL) NOPASSWD: /bin/systemctl status ossuary-*
-ossuary ALL=(ALL) NOPASSWD: /sbin/reboot
-ossuary ALL=(ALL) NOPASSWD: /sbin/shutdown
-EOF
-
-    print_success "User configuration completed"
+    print_success "User configuration completed (services run as root)"
 }
 
 create_directories() {
@@ -459,14 +447,15 @@ create_directories() {
         fi
     done
 
-    # Set proper ownership and permissions
-    if id "$OSSUARY_USER" &>/dev/null; then
-        chown -R root:root "$INSTALL_DIR" || print_warning "Failed to set ownership for $INSTALL_DIR"
-        chown -R root:root "$CONFIG_DIR" || print_warning "Failed to set ownership for $CONFIG_DIR"
-        chown -R "$OSSUARY_USER:$OSSUARY_USER" "$DATA_DIR" || print_warning "Failed to set ownership for $DATA_DIR"
-        chown -R "$OSSUARY_USER:$OSSUARY_USER" "$LOG_DIR" || print_warning "Failed to set ownership for $LOG_DIR"
-    else
-        print_warning "User $OSSUARY_USER does not exist, skipping ownership changes"
+    # Set proper ownership and permissions (services now run as root)
+    chown -R root:root "$INSTALL_DIR" || print_warning "Failed to set ownership for $INSTALL_DIR"
+    chown -R root:root "$CONFIG_DIR" || print_warning "Failed to set ownership for $CONFIG_DIR"
+    chown -R root:root "$DATA_DIR" || print_warning "Failed to set ownership for $DATA_DIR"
+    chown -R root:root "$LOG_DIR" || print_warning "Failed to set ownership for $LOG_DIR"
+
+    # Ensure browser data directory has proper permissions
+    if [[ -d "$DATA_DIR/chromium" ]]; then
+        chmod -R 755 "$DATA_DIR/chromium" || print_warning "Failed to set permissions for chromium data dir"
     fi
 
     chmod 755 "$INSTALL_DIR" || print_warning "Failed to set permissions for $INSTALL_DIR"

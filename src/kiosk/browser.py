@@ -669,8 +669,16 @@ class BrowserController:
         """Get security flags based on environment (2025 security fix)."""
         flags = []
 
+        # Check if running as root (takes precedence)
+        if os.getuid() == 0:
+            self.logger.info("Running as root - using no-sandbox mode")
+            flags.extend([
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+            ])
         # Check if running in container
-        if self._is_container():
+        elif self._is_container():
             self.logger.warning("Container detected - disabling sandbox for compatibility")
             flags.extend([
                 "--no-sandbox",

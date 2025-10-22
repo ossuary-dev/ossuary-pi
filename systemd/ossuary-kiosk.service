@@ -6,8 +6,8 @@ Requisite=graphical.target
 
 [Service]
 Type=exec
-User=ossuary
-Group=ossuary
+User=root
+Group=root
 ExecStart=/opt/ossuary/venv/bin/python /opt/ossuary/bin/ossuary-kiosk
 Restart=always
 RestartSec=10

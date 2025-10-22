@@ -5,8 +5,8 @@ Before=ossuary-portal.service ossuary-kiosk.service
 
 [Service]
 Type=exec
-User=ossuary
-Group=ossuary
+User=root
+Group=root
 ExecStart=/opt/ossuary/venv/bin/python /opt/ossuary/bin/ossuary-api
 Restart=always
 RestartSec=5
