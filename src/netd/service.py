@@ -8,6 +8,7 @@ and AP mode based on connectivity.
 
 import asyncio
 import logging
+import logging.handlers
 import signal
 import sys
 import json

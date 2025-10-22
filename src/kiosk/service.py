@@ -7,6 +7,7 @@ in full-screen mode with hardware acceleration support.
 
 import asyncio
 import logging
+import logging.handlers
 import signal
 import sys
 import os

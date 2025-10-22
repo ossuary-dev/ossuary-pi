@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import logging.handlers
 import signal
 import sys
 from pathlib import Path
