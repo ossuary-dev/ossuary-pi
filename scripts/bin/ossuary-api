@@ -3,6 +3,7 @@
 
 import sys
 import os
+import asyncio
 from pathlib import Path
 
 # Add source directory to Python path
@@ -12,4 +13,4 @@ from api.service import main
 
 if __name__ == "__main__":
     # API service can run as unprivileged user
-    main()
+    asyncio.run(main())

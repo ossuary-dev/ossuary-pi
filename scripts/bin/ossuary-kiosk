@@ -3,6 +3,7 @@
 
 import sys
 import os
+import asyncio
 from pathlib import Path
 
 # Add source directory to Python path
@@ -12,4 +13,4 @@ from kiosk.service import main
 
 if __name__ == "__main__":
     # Kiosk service runs as ossuary user
-    main()
+    asyncio.run(main())

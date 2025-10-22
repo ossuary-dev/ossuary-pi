@@ -45,11 +45,12 @@ if [[ -d "/home/lc/Documents/ossuary-pi" ]]; then
         print_success "Source code updated (fixes Pydantic regex and import issues)"
     fi
 
-    # Update scripts
+    # Update scripts (this fixes the async call issues)
     if [[ -d "/home/lc/Documents/ossuary-pi/scripts" ]]; then
         if [[ -d "/home/lc/Documents/ossuary-pi/scripts/bin" ]]; then
             cp -r /home/lc/Documents/ossuary-pi/scripts/bin/* /opt/ossuary/bin/
             chmod +x /opt/ossuary/bin/*
+            print_success "Service scripts updated (fixes async coroutine issues)"
         fi
         if [[ -f "/home/lc/Documents/ossuary-pi/scripts/ossuaryctl" ]]; then
             cp /home/lc/Documents/ossuary-pi/scripts/ossuaryctl /usr/local/bin/
