@@ -70,7 +70,7 @@ apt-get update
 apt-get install -y xinit xserver-xorg-legacy gir1.2-nm-1.0
 print_success "X11 packages installed"
 
-# 3. Set up X11 auto-start
+# 3. Set up X11 auto-start and permissions
 print_step "Configuring automatic X11 startup..."
 if [[ -d "/home/ossuary" ]]; then
     if [[ ! -f "/home/ossuary/.bashrc" ]] || ! grep -q "startx" "/home/ossuary/.bashrc"; then
@@ -86,6 +86,19 @@ EOF
     else
         print_success "X11 auto-start already configured"
     fi
+fi
+
+# Set up X11 access for ossuary user
+print_step "Configuring X11 access for kiosk service..."
+if [[ -f "/home/lc/.Xauthority" ]]; then
+    # Allow ossuary user to access X session
+    usermod -a -G lc ossuary 2>/dev/null || true
+    # Make Xauthority readable by lc group
+    chmod 640 /home/lc/.Xauthority 2>/dev/null || true
+    chgrp lc /home/lc/.Xauthority 2>/dev/null || true
+    print_success "X11 access configured for kiosk"
+else
+    print_warning "No X session found (/home/lc/.Xauthority missing)"
 fi
 
 # 4. Restart all services

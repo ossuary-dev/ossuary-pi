@@ -10,7 +10,7 @@ from typing import Optional, Dict, Any, Tuple
 
 
 class DisplayManager:
-    """Manages X display for kiosk mode."""
+    """Manages display for kiosk mode (X11 and Wayland)."""
 
     def __init__(self, config: Dict[str, Any]):
         """Initialize display manager."""
@@ -22,15 +22,80 @@ class DisplayManager:
         self.x_server_process: Optional[subprocess.Popen] = None
         self.window_manager_process: Optional[subprocess.Popen] = None
 
+        # Detect display system
+        self.is_wayland = self._detect_wayland()
+        self.logger.info(f"Display system: {'Wayland' if self.is_wayland else 'X11'}")
+
         # Display settings
         self.rotation = config.get("rotation", 0)
         self.resolution = config.get("resolution", "auto")
         self.brightness = config.get("brightness", 100)
 
+    def _detect_wayland(self) -> bool:
+        """Detect if we're running on Wayland."""
+        try:
+            # Primary detection: XDG_SESSION_TYPE
+            session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
+            if session_type == 'wayland':
+                return True
+            elif session_type == 'x11':
+                return False
+
+            # Fallback: Check WAYLAND_DISPLAY
+            if os.environ.get('WAYLAND_DISPLAY'):
+                return True
+
+            # Fallback: Check for labwc process (Pi 5 Wayland compositor)
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-f", "labwc"],
+                    capture_output=True, timeout=5
+                )
+                if result.returncode == 0:
+                    return True
+            except Exception:
+                pass
+
+            return False
+        except Exception:
+            return False
+
     async def initialize(self) -> bool:
         """Initialize display system."""
         try:
             self.logger.info("Initializing display system")
+
+            if self.is_wayland:
+                return await self._initialize_wayland()
+            else:
+                return await self._initialize_x11()
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize display: {e}")
+            return False
+
+    async def _initialize_wayland(self) -> bool:
+        """Initialize Wayland display."""
+        try:
+            self.logger.info("Initializing Wayland display")
+
+            # For Wayland, we just need to verify the compositor is running
+            if await self._is_wayland_running():
+                self.logger.info("Wayland compositor is running")
+                await self._configure_display()
+                return True
+            else:
+                self.logger.error("Wayland compositor not running")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize Wayland: {e}")
+            return False
+
+    async def _initialize_x11(self) -> bool:
+        """Initialize X11 display."""
+        try:
+            self.logger.info("Initializing X11 display")
 
             # Check if X server is already running
             if await self._is_x_server_running():
@@ -47,18 +112,59 @@ class DisplayManager:
             return False
 
         except Exception as e:
-            self.logger.error(f"Failed to initialize display: {e}")
+            self.logger.error(f"Failed to initialize X11: {e}")
             return False
 
     async def _is_x_server_running(self) -> bool:
         """Check if X server is running."""
         try:
+            # First try xdpyinfo
             result = subprocess.run(
                 ["xdpyinfo", "-display", self.display],
                 capture_output=True, timeout=5
             )
+            if result.returncode == 0:
+                return True
+
+            # Fallback: check if X process is running
+            result = subprocess.run(
+                ["pgrep", "-f", f"X.*{self.display}"],
+                capture_output=True, timeout=5
+            )
             return result.returncode == 0
-        except Exception:
+
+        except Exception as e:
+            self.logger.debug(f"Failed to check X server: {e}")
+            return False
+
+    async def _is_wayland_running(self) -> bool:
+        """Check if Wayland compositor is running."""
+        try:
+            # Check for WAYLAND_DISPLAY environment variable
+            if os.environ.get('WAYLAND_DISPLAY'):
+                return True
+
+            # Check for labwc process (Pi 5 default compositor)
+            result = subprocess.run(
+                ["pgrep", "-f", "labwc"],
+                capture_output=True, timeout=5
+            )
+            if result.returncode == 0:
+                return True
+
+            # Check for other common Wayland compositors
+            for compositor in ["wayfire", "weston", "sway"]:
+                result = subprocess.run(
+                    ["pgrep", "-f", compositor],
+                    capture_output=True, timeout=5
+                )
+                if result.returncode == 0:
+                    return True
+
+            return False
+
+        except Exception as e:
+            self.logger.debug(f"Failed to check Wayland: {e}")
             return False
 
     async def _start_x_server(self) -> bool:

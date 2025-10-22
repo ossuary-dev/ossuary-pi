@@ -111,12 +111,45 @@ check_os() {
     print_success "Operating system check passed"
 }
 
+detect_pi_model() {
+    local model="Unknown"
+    if [[ -f /proc/cpuinfo ]]; then
+        local cpuinfo=$(cat /proc/cpuinfo)
+        if grep -q "BCM2712" <<< "$cpuinfo"; then
+            model="Pi5"
+        elif grep -q "BCM2711" <<< "$cpuinfo"; then
+            model="Pi4"
+        elif grep -q "BCM2837" <<< "$cpuinfo"; then
+            model="Pi3"
+        elif grep -q "BCM2836" <<< "$cpuinfo"; then
+            model="Pi2"
+        elif grep -q "BCM2835" <<< "$cpuinfo"; then
+            model="Pi1"
+        fi
+    fi
+    echo "$model"
+}
+
 check_hardware() {
     print_step "Checking hardware compatibility..."
 
     # Check if running on Raspberry Pi
     if [[ -f /proc/cpuinfo ]] && grep -q "BCM\|Raspberry Pi" /proc/cpuinfo; then
-        print_success "Raspberry Pi detected"
+        local pi_model=$(detect_pi_model)
+        print_success "Raspberry Pi detected: $pi_model"
+
+        # Special notes for different models
+        case "$pi_model" in
+            "Pi5")
+                print_step "Pi 5 detected - will use optimized Wayland/X11 and Vulkan support"
+                ;;
+            "Pi4")
+                print_step "Pi 4 detected - will use VideoCore VI acceleration"
+                ;;
+            "Pi3")
+                print_step "Pi 3 detected - will use VideoCore IV acceleration"
+                ;;
+        esac
     else
         print_warning "Not running on Raspberry Pi hardware"
     fi
@@ -233,13 +266,41 @@ update_system() {
     print_success "System updated successfully"
 }
 
+detect_chromium_package() {
+    print_step "Detecting correct Chromium package..."
+
+    # Check what's available in repositories
+    if apt-cache show chromium-browser >/dev/null 2>&1; then
+        print_success "Using chromium-browser package"
+        echo "chromium-browser"
+    elif apt-cache show chromium >/dev/null 2>&1; then
+        print_success "Using chromium package"
+        echo "chromium"
+    else
+        print_warning "Neither chromium nor chromium-browser found in repositories"
+        print_step "Will try chromium as fallback"
+        echo "chromium"
+    fi
+}
+
 install_packages() {
     print_step "Installing required packages..."
 
     export DEBIAN_FRONTEND=noninteractive
 
-    # Install packages with retry logic
+    # Replace "chromium" in REQUIRED_PACKAGES with detected package
+    local chromium_package=$(detect_chromium_package)
+    local packages=()
     for package in "${REQUIRED_PACKAGES[@]}"; do
+        if [[ "$package" == "chromium" ]]; then
+            packages+=("$chromium_package")
+        else
+            packages+=("$package")
+        fi
+    done
+
+    # Install packages with retry logic
+    for package in "${packages[@]}"; do
         echo -n "Installing $package... "
         local attempts=0
         local max_attempts=3

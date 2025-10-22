@@ -33,6 +33,13 @@ class BrowserController:
         self.hide_cursor = config.get("hide_cursor", True)
         self.refresh_interval = config.get("refresh_interval", 0)
 
+        # Detect Pi model and display system
+        self.pi_model = self._detect_pi_model()
+        self.is_wayland = self._detect_display_system()
+        self.chromium_binary = self._get_chromium_binary()
+
+        self.logger.info(f"Pi model: {self.pi_model}, Display: {'Wayland' if self.is_wayland else 'X11'}, Binary: {self.chromium_binary}")
+
         # User data directory
         self.user_data_dir = Path("/var/lib/ossuary/chromium")
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -43,10 +50,83 @@ class BrowserController:
         self.restart_count = 0
         self.max_restarts = 5
 
+    def _detect_pi_model(self) -> str:
+        """Detect Raspberry Pi model."""
+        try:
+            with open('/proc/cpuinfo', 'r') as f:
+                content = f.read()
+                if 'BCM2711' in content:
+                    return 'Pi4'
+                elif 'BCM2712' in content:
+                    return 'Pi5'
+                elif 'BCM2837' in content:
+                    return 'Pi3'
+                else:
+                    return 'Unknown'
+        except:
+            return 'Unknown'
+
+    def _detect_display_system(self) -> bool:
+        """Detect display system based on config and environment."""
+        display_pref = self.config.get("display_preference", "auto")
+
+        if display_pref == "wayland":
+            return True
+        elif display_pref == "x11":
+            return False
+        else:  # auto
+            # Auto-detect from environment
+            session_type = os.environ.get('XDG_SESSION_TYPE', '').lower()
+            return session_type == 'wayland' or bool(os.environ.get('WAYLAND_DISPLAY'))
+
+    def _get_chromium_binary(self) -> str:
+        """Get correct Chromium binary for the system."""
+        # Check if user specified a binary
+        browser_pref = self.config.get("browser_binary", "auto")
+        if browser_pref != "auto":
+            # User specified a specific binary
+            try:
+                subprocess.run([browser_pref, '--version'], capture_output=True, timeout=5)
+                self.logger.info(f"Using user-specified browser: {browser_pref}")
+                return browser_pref
+            except Exception as e:
+                self.logger.warning(f"User-specified binary {browser_pref} not working: {e}")
+
+        # Auto-detect what's available (intelligent detection)
+        # Only real browsers that exist on Pi/ARM
+        candidates = ['chromium-browser', 'chromium']
+
+        for binary in candidates:
+            try:
+                result = subprocess.run(
+                    ['which', binary],
+                    capture_output=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    # Verify it actually works
+                    version_check = subprocess.run(
+                        [binary, '--version'],
+                        capture_output=True,
+                        timeout=5
+                    )
+                    if version_check.returncode == 0:
+                        self.logger.info(f"Found working browser: {binary}")
+                        return binary
+            except Exception as e:
+                self.logger.debug(f"Binary {binary} not available: {e}")
+                continue
+
+        # Fallback based on Pi model if nothing found
+        if self.pi_model == 'Pi5':
+            return 'chromium'  # Pi 5 typically uses chromium
+        else:
+            return 'chromium-browser'  # Older Pi models often use chromium-browser
+
     def _get_chromium_command(self, url: str) -> List[str]:
         """Build Chromium command with appropriate flags."""
         cmd = [
-            "chromium-browser",
+            self.chromium_binary,
             "--kiosk",
             "--noerrdialogs",
             "--disable-infobars",
@@ -64,48 +144,71 @@ class BrowserController:
             "--autoplay-policy=no-user-gesture-required",
         ]
 
-        # Detect GPU driver for compatibility (2025 fix)
-        gpu_driver = self._detect_gpu_driver()
-        self.logger.info(f"Detected GPU driver: {gpu_driver}")
-
-        # GPU and hardware acceleration flags
+        # Hardware acceleration flags based on Pi model and display system
         if self.enable_webgl or self.enable_webgpu:
-            if gpu_driver == 'vc4_v3d':
-                # VC4 V3D driver - known issues with EGL
+            if self.pi_model == 'Pi5':
+                # Pi 5: VideoCore VII - Based on real-world testing
+                # Your working command: chromium --kiosk --noerrdialogs --disable-infobars
+                # --enable-features=Vulkan --enable-unsafe-webgpu --ignore-gpu-blocklist
+                # --enable-features=VaapiVideoDecoder,CanvasOopRasterization
+
+                # Combine all enable-features into single flag (best practice)
+                features = ["VaapiVideoDecoder", "CanvasOopRasterization"]
+
+                if self.enable_webgpu:
+                    features.append("Vulkan")
+
+                base_flags = [
+                    "--ignore-gpu-blocklist",
+                    f"--enable-features={','.join(features)}",
+                ]
+
+                if self.enable_webgpu:
+                    # Add WebGPU support (tested working)
+                    base_flags.append("--enable-unsafe-webgpu")
+
+                if self.is_wayland:
+                    # Wayland-specific optimizations for Pi 5
+                    base_flags.extend([
+                        "--ozone-platform=wayland",
+                    ])
+                else:
+                    # X11 optimizations (your setup that worked)
+                    base_flags.extend([
+                        "--use-gl=egl",  # Critical for X11 on Pi
+                    ])
+
+                cmd.extend(base_flags)
+
+            elif self.pi_model == 'Pi4':
+                # Pi 4: VideoCore VI with V3D driver
                 cmd.extend([
                     "--enable-gpu",
-                    "--use-gl=desktop",  # Don't use EGL with VC4
                     "--enable-gpu-rasterization",
                     "--ignore-gpu-blocklist",
                     "--ignore-gpu-blacklist",
-                    "--enable-features=VaapiVideoDecoder",  # Hardware video decode
+                    "--enable-features=VaapiVideoDecoder",  # H.264 hardware decode
                 ])
-            elif gpu_driver == 'vc4_fkms':
-                # Fake KMS driver - more stable WebGL
+
+            elif self.pi_model == 'Pi3':
+                # Pi 3: VideoCore IV, more limited support
                 cmd.extend([
                     "--enable-gpu",
-                    "--use-gl=egl",
-                    "--enable-gpu-rasterization",
                     "--ignore-gpu-blocklist",
-                ])
-            elif gpu_driver == 'software':
-                # Software rendering fallback
-                cmd.extend([
-                    "--disable-gpu",
-                    "--disable-gpu-rasterization",
+                    "--use-gl=egl",  # Better compatibility with VC4
                 ])
             else:
-                # Default hardware acceleration
+                # Unknown Pi or fallback - use conservative settings
                 cmd.extend([
                     "--enable-gpu",
-                    "--use-gl=egl",
-                    "--enable-gpu-rasterization",
-                    "--enable-native-gpu-memory-buffers",
                     "--ignore-gpu-blocklist",
-                    "--ignore-gpu-blacklist",
-                    "--enable-gpu-memory-buffer-compositor-resources",
-                    "--enable-zero-copy",
                 ])
+        else:
+            # WebGL/WebGPU disabled - use software rendering
+            cmd.extend([
+                "--disable-gpu",
+                "--disable-gpu-rasterization",
+            ])
 
             # WebGL specific flags
             if self.enable_webgl:

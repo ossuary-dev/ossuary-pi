@@ -58,12 +58,19 @@ class ConfigManager:
     def _ensure_directories(self) -> None:
         """Ensure configuration directories exist."""
         try:
-            self.config_dir.mkdir(parents=True, exist_ok=True)
-            self.backup_dir.mkdir(parents=True, exist_ok=True)
+            # Only try to create directories if we have permission
+            if os.access(self.config_dir.parent, os.W_OK) or os.geteuid() == 0:
+                self.config_dir.mkdir(parents=True, exist_ok=True)
+                self.backup_dir.mkdir(parents=True, exist_ok=True)
 
-            # Set proper permissions
-            os.chmod(self.config_dir, 0o755)
-            os.chmod(self.backup_dir, 0o755)
+                # Set proper permissions if we're root
+                if os.geteuid() == 0:
+                    os.chmod(self.config_dir, 0o755)
+                    os.chmod(self.backup_dir, 0o755)
+            else:
+                # Directory should already exist, just check it
+                if not self.config_dir.exists():
+                    self.logger.warning(f"Config directory {self.config_dir} does not exist and cannot be created")
 
         except Exception as e:
             self.logger.error(f"Failed to create config directories: {e}")

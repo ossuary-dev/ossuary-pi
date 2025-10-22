@@ -54,6 +54,8 @@ class KioskConfig(BaseModel):
     disable_screensaver: bool = Field(default=True)
     hide_cursor: bool = Field(default=True)
     autostart_delay: int = Field(default=5, ge=0, le=60)
+    display_preference: str = Field(default="auto", pattern="^(auto|wayland|x11)$")
+    browser_binary: str = Field(default="auto")
 
     @field_validator("url", "default_url")
     @classmethod

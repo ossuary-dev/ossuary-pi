@@ -7,7 +7,7 @@ import ipaddress
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime, timedelta
 
-# Try modern python-sdbus-networkmanager first (2025 standard)
+# Try sdbus NetworkManager bindings (may not be available on all systems)
 try:
     from sdbus_async.networkmanager import NetworkManager as NMAsyncClient
     from sdbus_async.networkmanager.enums import DeviceType, DeviceState, ConnectivityState
@@ -25,13 +25,13 @@ except ImportError:
     GI_AVAILABLE = False
 
 if not SDBUS_AVAILABLE and not GI_AVAILABLE:
-    logging.error("No NetworkManager bindings available. Install python-sdbus-networkmanager or python3-gi")
+    logging.error("No NetworkManager bindings available. Install python3-gi and gir1.2-nm-1.0")
     raise ImportError("NetworkManager bindings not found")
 
 if SDBUS_AVAILABLE:
-    logging.info("Using modern python-sdbus-networkmanager")
+    logging.info("Using sdbus NetworkManager bindings")
 else:
-    logging.warning("Using deprecated GI bindings - upgrade to python-sdbus-networkmanager")
+    logging.warning("Using GI bindings for NetworkManager")
 
 from .states import (
     NetworkState, ConnectionState, APState, WiFiNetwork,
@@ -99,21 +99,27 @@ class NetworkManager:
         """Initialize python-sdbus NetworkManager client."""
         try:
             self.nm_client = NMAsyncClient()
-            # Get WiFi device
+            # Get WiFi device - devices might be a list of paths or objects
             devices = await self.nm_client.get_devices()
-            for device_path in devices:
-                # If devices returns paths, get device object from path
-                if isinstance(device_path, str):
-                    device = await self.nm_client.get_device(device_path)
-                else:
-                    device = device_path
 
-                device_type = await device.device_type
-                if device_type == DeviceType.WIFI:
-                    self.wifi_device = device
-                    break
+            for device_path in devices:
+                try:
+                    # Try to get device type directly if it's already an object
+                    if hasattr(device_path, 'device_type'):
+                        device_type = await device_path.device_type
+                        if device_type == DeviceType.WIFI:
+                            self.wifi_device = device_path
+                            break
+                    # If it's a path string, we need a different approach
+                    elif isinstance(device_path, str):
+                        # Skip for now - may need to create device object from path
+                        continue
+                except Exception as e:
+                    self.logger.debug(f"Failed to check device {device_path}: {e}")
+                    continue
 
             if not self.wifi_device:
+                self.logger.warning("No WiFi device found via sdbus, falling back to GI")
                 raise InterfaceError("No WiFi device found")
 
         except Exception as e:

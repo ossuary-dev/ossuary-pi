@@ -14,12 +14,12 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/home/ossuary/.Xauthority
+Environment=XAUTHORITY=/home/lc/.Xauthority
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/ossuary/src
 
 # Allow access to X display and audio
-SupplementaryGroups=audio video input
+SupplementaryGroups=audio video input lc
 
 [Install]
 WantedBy=graphical.target
