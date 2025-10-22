@@ -288,10 +288,17 @@ class BrowserController:
 
             # Prepare environment
             env = os.environ.copy()
+
+            # Detect X11 session and set appropriate environment
+            display = self._detect_display()
+            xauthority = self._detect_xauthority()
+
             env.update({
-                "DISPLAY": ":0",
-                "XAUTHORITY": "/home/pi/.Xauthority",
+                "DISPLAY": display,
             })
+
+            if xauthority:
+                env["XAUTHORITY"] = xauthority
 
             # Disable screensaver if configured
             if self.disable_screensaver:
@@ -711,3 +718,92 @@ class BrowserController:
             return False
         except Exception:
             return False
+
+    def _detect_display(self) -> str:
+        """Detect the correct DISPLAY value."""
+        # Check environment first
+        if 'DISPLAY' in os.environ:
+            return os.environ['DISPLAY']
+
+        # Common defaults
+        return ":0"
+
+    def _detect_xauthority(self) -> Optional[str]:
+        """Detect the correct XAUTHORITY file."""
+        # Check environment first
+        if 'XAUTHORITY' in os.environ:
+            xauth_path = os.environ['XAUTHORITY']
+            if os.path.exists(xauth_path):
+                return xauth_path
+
+        # Try to find X session owner
+        try:
+            # Find who owns the X server process
+            result = subprocess.run(
+                ["ps", "aux"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            for line in result.stdout.splitlines():
+                if '/usr/bin/X' in line or 'Xorg' in line:
+                    # Extract username (second column in ps aux)
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        x_user = parts[0]
+                        self.logger.info(f"Found X server running as user: {x_user}")
+
+                        # Try common Xauthority locations for this user
+                        possible_paths = [
+                            f"/home/{x_user}/.Xauthority",
+                            f"/home/{x_user}/.Xauth",
+                            f"/tmp/.X11-unix/X{x_user}",
+                        ]
+
+                        # Special case for root
+                        if x_user == 'root':
+                            possible_paths.insert(0, "/root/.Xauthority")
+
+                        for path in possible_paths:
+                            if os.path.exists(path):
+                                self.logger.info(f"Using XAUTHORITY: {path}")
+                                return path
+
+                        break
+
+            # Fallback: try to detect from running X processes
+            result = subprocess.run(
+                ["who", "-u"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            for line in result.stdout.splitlines():
+                if ':0' in line or 'tty7' in line:  # Common X session indicators
+                    parts = line.split()
+                    if parts:
+                        x_user = parts[0]
+                        xauth_path = f"/home/{x_user}/.Xauthority"
+                        if os.path.exists(xauth_path):
+                            self.logger.info(f"Using XAUTHORITY from 'who': {xauth_path}")
+                            return xauth_path
+
+        except Exception as e:
+            self.logger.debug(f"Failed to detect X session user: {e}")
+
+        # Last resort: try common locations
+        fallback_paths = [
+            "/home/pi/.Xauthority",  # Common Pi default
+            "/home/user/.Xauthority",  # Common generic user
+            "/root/.Xauthority",  # Root fallback
+        ]
+
+        for path in fallback_paths:
+            if os.path.exists(path):
+                self.logger.warning(f"Using fallback XAUTHORITY: {path}")
+                return path
+
+        self.logger.warning("Could not find XAUTHORITY file")
+        return None

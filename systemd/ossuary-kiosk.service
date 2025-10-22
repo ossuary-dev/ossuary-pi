@@ -14,7 +14,7 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 Environment=DISPLAY=:0
-Environment=XAUTHORITY=/root/.Xauthority
+# XAUTHORITY will be dynamically determined by the kiosk service
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/ossuary/src
 
