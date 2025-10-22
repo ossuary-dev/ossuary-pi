@@ -1,6 +1,6 @@
 [Unit]
 Description=Ossuary API Gateway
-After=ossuary-netd.service
+After=ossuary-config.service ossuary-netd.service
 Before=ossuary-portal.service ossuary-kiosk.service
 
 [Service]

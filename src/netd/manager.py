@@ -101,7 +101,13 @@ class NetworkManager:
             self.nm_client = NMAsyncClient()
             # Get WiFi device
             devices = await self.nm_client.get_devices()
-            for device in devices:
+            for device_path in devices:
+                # If devices returns paths, get device object from path
+                if isinstance(device_path, str):
+                    device = await self.nm_client.get_device(device_path)
+                else:
+                    device = device_path
+
                 device_type = await device.device_type
                 if device_type == DeviceType.WIFI:
                     self.wifi_device = device
