@@ -7,7 +7,7 @@ import asyncio
 from pathlib import Path
 
 # Add source directory to Python path
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+sys.path.insert(0, "/opt/ossuary/src")
 
 from netd.service import main
 
