@@ -673,6 +673,14 @@ configure_services() {
         if [[ -f "/etc/systemd/system/${service}.service" ]]; then
             if systemctl enable "$service"; then
                 echo "Enabled $service"
+                # Start the service immediately (except kiosk which needs X11)
+                if [[ "$service" != "ossuary-kiosk" ]]; then
+                    if systemctl start "$service"; then
+                        echo "Started $service"
+                    else
+                        print_warning "Failed to start $service (will start on reboot)"
+                    fi
+                fi
             else
                 print_warning "Failed to enable $service"
                 failed_services+=("$service")
@@ -786,11 +794,21 @@ print_completion() {
     echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "${CYAN}Installation Summary:${NC}"
-    echo "  • Services installed and configured"
+    echo "  • Services installed, configured, and started"
     echo "  • User '$OSSUARY_USER' created with proper permissions"
     echo "  • NetworkManager configured for WiFi management"
     echo "  • Display system configured for kiosk mode"
     echo "  • Firewall rules applied"
+    echo ""
+    echo -e "${CYAN}Service Status:${NC}"
+    for service in ossuary-config ossuary-netd ossuary-api ossuary-portal; do
+        if systemctl is-active "$service" &>/dev/null; then
+            echo "  • $service: ${GREEN}running${NC}"
+        else
+            echo "  • $service: ${YELLOW}stopped (will start on reboot)${NC}"
+        fi
+    done
+    echo "  • ossuary-kiosk: ${YELLOW}will start after reboot with X11${NC}"
     echo ""
     echo -e "${YELLOW}Next Steps:${NC}"
     echo "  1. Reboot the system: ${BLUE}sudo reboot${NC}"
