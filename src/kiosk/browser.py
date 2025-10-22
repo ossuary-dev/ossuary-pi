@@ -142,6 +142,7 @@ class BrowserController:
             "--check-for-update-interval=31536000",  # Never check for updates
             f"--user-data-dir={self.user_data_dir}",
             "--autoplay-policy=no-user-gesture-required",
+            "--password-store=basic",  # Use basic password store to avoid keyring issues
         ]
 
         # Hardware acceleration flags based on Pi model and display system
