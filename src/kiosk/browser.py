@@ -161,61 +161,63 @@ class BrowserController:
         # Hardware acceleration flags based on Pi model and display system
         if self.enable_webgl or self.enable_webgpu:
             if self.pi_model == 'Pi5':
-                # Pi 5: VideoCore VII - Based on real-world testing
-                # Your working command: chromium --kiosk --noerrdialogs --disable-infobars
+                # Pi 5: Based on proven working command for Pi OS 64-bit desktop
+                # DISPLAY=:0 chromium --kiosk --noerrdialogs --disable-infobars
                 # --enable-features=Vulkan --enable-unsafe-webgpu --ignore-gpu-blocklist
-                # --enable-features=VaapiVideoDecoder,CanvasOopRasterization
+                # --enable-features=VaapiVideoDecoder,CanvasOopRasterization --password-store=basic
 
-                # Combine all enable-features into single flag (best practice)
+                # Build features list exactly as in working command
+                # Combine all features into single --enable-features flag for best practice
                 features = ["VaapiVideoDecoder", "CanvasOopRasterization"]
 
                 if self.enable_webgpu:
                     features.append("Vulkan")
+                    cmd.append("--enable-unsafe-webgpu")
 
-                base_flags = [
+                # Core acceleration flags that worked
+                cmd.extend([
                     "--ignore-gpu-blocklist",
                     f"--enable-features={','.join(features)}",
-                ]
+                ])
 
-                if self.enable_webgpu:
-                    # Add WebGPU support (tested working)
-                    base_flags.append("--enable-unsafe-webgpu")
-
-                if self.is_wayland:
-                    # Wayland-specific optimizations for Pi 5
-                    base_flags.extend([
-                        "--ozone-platform=wayland",
-                    ])
-                else:
-                    # X11 optimizations (your setup that worked)
-                    base_flags.extend([
-                        "--use-gl=egl",  # Critical for X11 on Pi
-                    ])
-
-                cmd.extend(base_flags)
+                # Note: Intentionally NOT adding --use-gl=egl or --ozone-platform flags
+                # Pi 5 with proper dtoverlay config handles display system detection automatically
 
             elif self.pi_model == 'Pi4':
-                # Pi 4: VideoCore VI with V3D driver
+                # Pi 4: VideoCore VI with V3D driver - optimized settings
+                features = [
+                    "VaapiVideoDecoder",        # H.264 hardware decode
+                    "CanvasOopRasterization",   # GPU canvas rendering
+                ]
+
                 cmd.extend([
                     "--enable-gpu",
                     "--enable-gpu-rasterization",
                     "--ignore-gpu-blocklist",
                     "--ignore-gpu-blacklist",
-                    "--enable-features=VaapiVideoDecoder",  # H.264 hardware decode
+                    "--enable-zero-copy",
+                    f"--enable-features={','.join(features)}",
                 ])
 
+                if self.is_wayland:
+                    cmd.extend(["--ozone-platform=wayland"])
+                else:
+                    cmd.extend(["--use-gl=egl"])
+
             elif self.pi_model == 'Pi3':
-                # Pi 3: VideoCore IV, more limited support
+                # Pi 3: VideoCore IV - limited but functional acceleration
                 cmd.extend([
                     "--enable-gpu",
                     "--ignore-gpu-blocklist",
-                    "--use-gl=egl",  # Better compatibility with VC4
+                    "--use-gl=egl",
+                    "--enable-features=VaapiVideoDecoder",
                 ])
             else:
-                # Unknown Pi or fallback - use conservative settings
+                # Unknown Pi or fallback - conservative acceleration
                 cmd.extend([
                     "--enable-gpu",
                     "--ignore-gpu-blocklist",
+                    "--use-gl=egl",
                 ])
         else:
             # WebGL/WebGPU disabled - use software rendering

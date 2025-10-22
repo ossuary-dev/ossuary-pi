@@ -997,19 +997,26 @@ EOF
 
         # Display driver settings based on Pi model and OS version
         if [[ "$pi_model" == "Pi5" ]]; then
-            # Pi 5 specific settings (Trixie/modern)
-            print_step "Applying Pi 5 display settings..."
+            # Pi 5 specific settings for optimal hardware acceleration
+            print_step "Applying Pi 5 hardware acceleration settings..."
 
-            # For Pi 5, use CMA instead of gpu_mem (Trixie recommendation)
-            if ! grep -q "dtoverlay=vc4-kms-v3d" "$config_file"; then
-                if [[ "$debian_version" == "13" ]]; then
-                    # Trixie: Use CMA for memory management
-                    settings_to_add+=("dtoverlay=vc4-kms-v3d,cma-256")
-                else
-                    # Bookworm fallback
-                    settings_to_add+=("dtoverlay=vc4-kms-v3d")
-                fi
+            # Pi 5 uses different overlays for proper acceleration
+            if ! grep -q "dtoverlay=vc4-kms-v3d-pi5" "$config_file"; then
+                settings_to_add+=("dtoverlay=vc4-kms-v3d-pi5")
             fi
+
+            # Video decode acceleration (H.264/HEVC support)
+            if ! grep -q "dtoverlay=rpivid-v4l2" "$config_file"; then
+                settings_to_add+=("dtoverlay=rpivid-v4l2")
+            fi
+
+            # Pi 5 framebuffer settings
+            if ! grep -q "max_framebuffers=" "$config_file"; then
+                settings_to_add+=("max_framebuffers=2")
+            fi
+
+            # Note: gpu_mem has no effect on Pi 5, but CMA is managed automatically
+            # Pi 5 does not allocate GPU memory on behalf of the OS
 
             # Headless resolution for Pi 5 (via config.txt method)
             if ! grep -q "hdmi_group=" "$config_file"; then
@@ -1024,26 +1031,50 @@ EOF
             fi
 
         elif [[ "$pi_model" == "Pi4" ]]; then
-            # Pi 4 settings
-            print_step "Applying Pi 4 display settings..."
+            # Pi 4 hardware acceleration settings
+            print_step "Applying Pi 4 hardware acceleration settings..."
 
+            # Pi 4 uses standard KMS overlay
             if ! grep -q "dtoverlay=vc4-kms-v3d" "$config_file"; then
                 settings_to_add+=("dtoverlay=vc4-kms-v3d")
             fi
+
+            # Pi 4 optimal GPU memory allocation
+            # 128MB for 4GB+ models, 76MB for 1-2GB models
             if ! grep -q "gpu_mem=" "$config_file"; then
-                settings_to_add+=("gpu_mem=128")
+                # Check total memory to set appropriate gpu_mem
+                local total_mem_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+                local total_mem_mb=$((total_mem_kb / 1024))
+
+                if [[ $total_mem_mb -ge 4096 ]]; then
+                    settings_to_add+=("gpu_mem=128")  # 4GB+ models
+                elif [[ $total_mem_mb -ge 1024 ]]; then
+                    settings_to_add+=("gpu_mem=76")   # 1-2GB models
+                else
+                    settings_to_add+=("gpu_mem=64")   # <1GB models
+                fi
+            fi
+
+            # Pi 4 framebuffer optimization
+            if ! grep -q "max_framebuffers=" "$config_file"; then
+                settings_to_add+=("max_framebuffers=2")
             fi
 
         else
-            # Pi 3 and older
+            # Pi 3 and older - conservative settings
             print_step "Applying Pi 3/older display settings..."
 
             if ! grep -q "dtoverlay=vc4-kms-v3d" "$config_file"; then
                 settings_to_add+=("dtoverlay=vc4-kms-v3d")
             fi
             if ! grep -q "gpu_mem=" "$config_file"; then
-                settings_to_add+=("gpu_mem=64")
+                settings_to_add+=("gpu_mem=64")  # Conservative for older models
             fi
+        fi
+
+        # Common performance optimizations for all models
+        if ! grep -q "arm_64bit=1" "$config_file" && [[ $(uname -m) == "aarch64" ]]; then
+            settings_to_add+=("arm_64bit=1")
         fi
 
         # Disable rainbow splash
