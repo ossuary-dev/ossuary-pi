@@ -267,46 +267,27 @@ update_system() {
 }
 
 detect_chromium_package() {
-    print_step "Detecting correct Chromium package..."
-
     # First check what's already installed
-    if dpkg -l | grep -q "^ii  chromium-browser "; then
-        print_success "chromium-browser already installed"
+    if dpkg -l chromium-browser 2>/dev/null | grep -q "^ii"; then
         echo "chromium-browser"
         return
-    elif dpkg -l | grep -q "^ii  chromium "; then
-        print_success "chromium already installed"
+    elif dpkg -l chromium 2>/dev/null | grep -q "^ii"; then
         echo "chromium"
         return
-    elif dpkg -l | grep -q "^ii  firefox-esr "; then
-        print_success "firefox-esr already installed"
+    elif dpkg -l firefox-esr 2>/dev/null | grep -q "^ii"; then
         echo "firefox-esr"
         return
     fi
 
     # Check what's available in repositories
     if apt-cache show chromium-browser >/dev/null 2>&1; then
-        print_success "Using chromium-browser package"
         echo "chromium-browser"
     elif apt-cache show chromium >/dev/null 2>&1; then
-        print_success "Using chromium package"
         echo "chromium"
+    elif apt-cache show firefox-esr >/dev/null 2>&1; then
+        echo "firefox-esr"
     else
-        print_warning "Neither chromium nor chromium-browser found in repositories"
-        print_warning "This may happen on newer Raspberry Pi OS versions"
-        print_step "Checking for alternative browser packages..."
-
-        # Try firefox-esr as fallback
-        if apt-cache show firefox-esr >/dev/null 2>&1; then
-            print_success "Using firefox-esr as browser alternative"
-            echo "firefox-esr"
-        else
-            print_error "No suitable browser package found in repositories"
-            print_error "Please ensure your package lists are up to date:"
-            print_error "  sudo apt-get update"
-            print_error "Or install a browser manually after installation"
-            echo "skip-browser"
-        fi
+        echo "skip-browser"
     fi
 }
 
@@ -337,14 +318,20 @@ install_packages() {
     fi
 
     # Replace "chromium" in REQUIRED_PACKAGES with detected package
+    print_step "Detecting correct Chromium package..."
     local chromium_package=$(detect_chromium_package)
     local packages=()
     for package in "${REQUIRED_PACKAGES[@]}"; do
         if [[ "$package" == "chromium" ]]; then
             if [[ "$chromium_package" != "skip-browser" ]]; then
                 packages+=("$chromium_package")
+                if dpkg -l "$chromium_package" 2>/dev/null | grep -q "^ii"; then
+                    print_success "$chromium_package already installed"
+                else
+                    print_success "Using $chromium_package package"
+                fi
             else
-                print_warning "Skipping browser package installation - install manually later"
+                print_warning "No suitable browser package found - install manually later"
             fi
         else
             packages+=("$package")
@@ -356,7 +343,7 @@ install_packages() {
         echo -n "Installing $package... "
 
         # Check if package is already installed
-        if dpkg -l | grep -q "^ii  $package "; then
+        if dpkg -l "$package" 2>/dev/null | grep -q "^ii"; then
             echo -e "${GREEN}ALREADY INSTALLED${NC}"
             continue
         fi
@@ -496,6 +483,21 @@ install_ossuary() {
     if [[ -f "$(dirname "$0")/src/config/__init__.py" ]]; then
         source_dir="$(cd "$(dirname "$0")" && pwd)"
         print_step "Installing from local source: $source_dir"
+
+        # Validate required directories exist in local source
+        local required_dirs=("src" "systemd")
+        local missing_dirs=()
+        for dir in "${required_dirs[@]}"; do
+            if [[ ! -d "$source_dir/$dir" ]]; then
+                missing_dirs+=("$dir")
+            fi
+        done
+
+        if [[ ${#missing_dirs[@]} -gt 0 ]]; then
+            print_error "Missing required directories in source: ${missing_dirs[*]}"
+            print_error "Please ensure you're running from the correct ossuary-pi directory"
+            exit 1
+        fi
     else
         print_step "Cloning from repository..."
         cd /tmp
@@ -529,24 +531,47 @@ install_ossuary() {
     # Copy source files with error checking
     print_step "Copying source files..."
 
-    if [[ -d "$source_dir/src" ]]; then
+    if [[ -d "$source_dir/src" ]] && [[ -n "$(ls -A "$source_dir/src" 2>/dev/null)" ]]; then
         cp -r "$source_dir/src/"* "$INSTALL_DIR/src/" || { print_error "Failed to copy src files"; exit 1; }
+    elif [[ -d "$source_dir/src" ]]; then
+        print_warning "Source src directory is empty, skipping"
+    else
+        print_error "Source src directory not found: $source_dir/src"
+        exit 1
     fi
 
-    if [[ -d "$source_dir/web" ]]; then
+    if [[ -d "$source_dir/web" ]] && [[ -n "$(ls -A "$source_dir/web" 2>/dev/null)" ]]; then
         cp -r "$source_dir/web/"* "$INSTALL_DIR/web/" || { print_error "Failed to copy web files"; exit 1; }
+    elif [[ -d "$source_dir/web" ]]; then
+        print_warning "Source web directory is empty, skipping"
+    else
+        print_error "Source web directory not found: $source_dir/web"
+        exit 1
     fi
 
-    if [[ -d "$source_dir/config" ]]; then
+    if [[ -d "$source_dir/config" ]] && [[ -n "$(ls -A "$source_dir/config" 2>/dev/null)" ]]; then
         cp -r "$source_dir/config/"* "$CONFIG_DIR/" || { print_error "Failed to copy config files"; exit 1; }
+    elif [[ -d "$source_dir/config" ]]; then
+        print_warning "Source config directory is empty, skipping"
+    else
+        print_warning "Source config directory not found: $source_dir/config"
     fi
 
-    if [[ -d "$source_dir/systemd" ]]; then
+    if [[ -d "$source_dir/systemd" ]] && [[ -n "$(ls -A "$source_dir/systemd" 2>/dev/null)" ]]; then
         cp -r "$source_dir/systemd/"* "/etc/systemd/system/" || { print_error "Failed to copy systemd files"; exit 1; }
+    elif [[ -d "$source_dir/systemd" ]]; then
+        print_warning "Source systemd directory is empty, skipping"
+    else
+        print_error "Source systemd directory not found: $source_dir/systemd"
+        exit 1
     fi
 
-    if [[ -d "$source_dir/scripts/bin" ]]; then
+    if [[ -d "$source_dir/scripts/bin" ]] && [[ -n "$(ls -A "$source_dir/scripts/bin" 2>/dev/null)" ]]; then
         cp -r "$source_dir/scripts/bin/"* "$INSTALL_DIR/bin/" || { print_error "Failed to copy bin files"; exit 1; }
+    elif [[ -d "$source_dir/scripts/bin" ]]; then
+        print_warning "Source scripts/bin directory is empty, skipping"
+    else
+        print_warning "Source scripts/bin directory not found: $source_dir/scripts/bin"
     fi
 
     if [[ -f "$source_dir/scripts/ossuaryctl" ]]; then
