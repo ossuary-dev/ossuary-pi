@@ -696,13 +696,26 @@ class NetworkManager:
             self.logger.debug(f"Connection cleanup failed (not critical): {e}")
 
     async def _configure_hotspot_connection(self, connection_name: str):
-        """Configure the hotspot connection for proper operation."""
+        """Configure the hotspot connection for proper captive portal operation."""
         try:
             # Configure IPv4 for shared method (enables DHCP server)
             subprocess.run([
                 "nmcli", "connection", "modify", connection_name,
                 "ipv4.method", "shared",
                 "ipv4.address", f"{self.ap_config.ip_address}/24"
+            ], capture_output=True, timeout=10)
+
+            # Set DNS servers for captive portal detection
+            # Point to ourselves (the AP gateway) for captive portal functionality
+            subprocess.run([
+                "nmcli", "connection", "modify", connection_name,
+                "ipv4.dns", self.ap_config.ip_address
+            ], capture_output=True, timeout=10)
+
+            # Configure DHCP options for captive portal detection
+            subprocess.run([
+                "nmcli", "connection", "modify", connection_name,
+                "ipv4.dhcp-option", "6:" + self.ap_config.ip_address  # DNS server
             ], capture_output=True, timeout=10)
 
             # Disable IPv6 for simplicity
@@ -717,7 +730,13 @@ class NetworkManager:
                 "connection.autoconnect", "false"
             ], capture_output=True, timeout=10)
 
-            self.logger.info(f"Configured hotspot connection: {connection_name}")
+            # Enable connection sharing (important for DHCP/NAT)
+            subprocess.run([
+                "nmcli", "connection", "modify", connection_name,
+                "connection.zone", "public"
+            ], capture_output=True, timeout=10)
+
+            self.logger.info(f"Configured hotspot connection: {connection_name} with captive portal DNS")
 
         except Exception as e:
             self.logger.warning(f"Failed to configure hotspot connection: {e}")

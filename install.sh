@@ -301,7 +301,21 @@ detect_chromium_package() {
     fi
 
     # Check what's available in repositories
-    # For Pi OS 64-bit, chromium (not chromium-browser) is the correct package
+    # On Debian Trixie (13), use 'chromium' regardless of Pi model
+    local debian_version=""
+    if [[ -f /etc/os-release ]]; then
+        debian_version=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2)
+    fi
+
+    if [[ "$debian_version" == "13" ]]; then
+        # Trixie uses 'chromium' package
+        if apt-cache show chromium >/dev/null 2>&1; then
+            echo "chromium"
+            return
+        fi
+    fi
+
+    # For other versions, check 64-bit Pi 5 first
     local pi_model=$(detect_pi_model)
     local arch=$(uname -m)
 
