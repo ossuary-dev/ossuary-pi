@@ -269,6 +269,21 @@ update_system() {
 detect_chromium_package() {
     print_step "Detecting correct Chromium package..."
 
+    # First check what's already installed
+    if dpkg -l | grep -q "^ii  chromium-browser "; then
+        print_success "chromium-browser already installed"
+        echo "chromium-browser"
+        return
+    elif dpkg -l | grep -q "^ii  chromium "; then
+        print_success "chromium already installed"
+        echo "chromium"
+        return
+    elif dpkg -l | grep -q "^ii  firefox-esr "; then
+        print_success "firefox-esr already installed"
+        echo "firefox-esr"
+        return
+    fi
+
     # Check what's available in repositories
     if apt-cache show chromium-browser >/dev/null 2>&1; then
         print_success "Using chromium-browser package"
@@ -278,8 +293,20 @@ detect_chromium_package() {
         echo "chromium"
     else
         print_warning "Neither chromium nor chromium-browser found in repositories"
-        print_step "Will try chromium as fallback"
-        echo "chromium"
+        print_warning "This may happen on newer Raspberry Pi OS versions"
+        print_step "Checking for alternative browser packages..."
+
+        # Try firefox-esr as fallback
+        if apt-cache show firefox-esr >/dev/null 2>&1; then
+            print_success "Using firefox-esr as browser alternative"
+            echo "firefox-esr"
+        else
+            print_error "No suitable browser package found in repositories"
+            print_error "Please ensure your package lists are up to date:"
+            print_error "  sudo apt-get update"
+            print_error "Or install a browser manually after installation"
+            echo "skip-browser"
+        fi
     fi
 }
 
@@ -288,12 +315,37 @@ install_packages() {
 
     export DEBIAN_FRONTEND=noninteractive
 
+    # Check available disk space before installation
+    local available_kb=$(df /var/cache/apt | awk 'NR==2 {print $4}')
+    local available_mb=$((available_kb / 1024))
+
+    if [[ $available_mb -lt 500 ]]; then
+        print_warning "Low disk space detected (${available_mb}MB available)"
+        print_step "Cleaning package cache to free space..."
+        apt-get clean || true
+        apt-get autoremove -y || true
+
+        # Recheck after cleanup
+        available_kb=$(df /var/cache/apt | awk 'NR==2 {print $4}')
+        available_mb=$((available_kb / 1024))
+
+        if [[ $available_mb -lt 200 ]]; then
+            print_error "Insufficient disk space for package installation (${available_mb}MB)"
+            print_error "Please free up disk space and try again"
+            exit 1
+        fi
+    fi
+
     # Replace "chromium" in REQUIRED_PACKAGES with detected package
     local chromium_package=$(detect_chromium_package)
     local packages=()
     for package in "${REQUIRED_PACKAGES[@]}"; do
         if [[ "$package" == "chromium" ]]; then
-            packages+=("$chromium_package")
+            if [[ "$chromium_package" != "skip-browser" ]]; then
+                packages+=("$chromium_package")
+            else
+                print_warning "Skipping browser package installation - install manually later"
+            fi
         else
             packages+=("$package")
         fi
@@ -302,31 +354,42 @@ install_packages() {
     # Install packages with retry logic
     for package in "${packages[@]}"; do
         echo -n "Installing $package... "
+
+        # Check if package is already installed
+        if dpkg -l | grep -q "^ii  $package "; then
+            echo -e "${GREEN}ALREADY INSTALLED${NC}"
+            continue
+        fi
+
         local attempts=0
         local max_attempts=3
         local success=false
 
         while [[ $attempts -lt $max_attempts ]]; do
-            if apt-get install -y "$package" 2>/dev/null; then
+            if apt-get install -y "$package"; then
                 echo -e "${GREEN}OK${NC}"
                 success=true
                 break
             else
+                local exit_code=$?
                 ((attempts++))
                 if [[ $attempts -lt $max_attempts ]]; then
                     echo -n "retry $attempts... "
                     sleep 2
+                else
+                    echo -e "${RED}FAILED${NC}"
+                    print_error "Failed to install $package after $max_attempts attempts (exit code: $exit_code)"
+                    print_error "This may be due to:"
+                    print_error "  - Package not available in repositories"
+                    print_error "  - Network connectivity issues"
+                    print_error "  - Dependency conflicts"
+                    print_error "  - Insufficient disk space"
+                    print_error ""
+                    print_error "Try running manually: apt-get install -y $package"
+                    exit 1
                 fi
             fi
         done
-
-        if [[ $success == false ]]; then
-            echo -e "${RED}FAILED${NC}"
-            print_error "Failed to install $package after $max_attempts attempts"
-            print_error "Last error:"
-            apt-get install -y "$package"
-            exit 1
-        fi
     done
 
     # Python GI packages are now installed via apt, no additional pip packages needed
