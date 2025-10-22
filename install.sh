@@ -631,6 +631,13 @@ install_ossuary() {
 configure_network_manager() {
     print_step "Configuring NetworkManager..."
 
+    # Check if we're on a desktop environment - skip NetworkManager config if so
+    if systemctl is-active --quiet graphical.target && pgrep -f "lightdm|gdm|sddm|lxdm" > /dev/null; then
+        print_warning "Desktop environment detected - skipping NetworkManager reconfiguration"
+        print_step "Using existing NetworkManager configuration"
+        return 0
+    fi
+
     # Enable NetworkManager and disable conflicting services
     systemctl enable NetworkManager
 
@@ -744,6 +751,140 @@ EOF
             touch "$OSSUARY_HOME/.Xauthority"
             chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.Xauthority"
             chmod 600 "$OSSUARY_HOME/.Xauthority"
+        fi
+
+        # Handle X11 authorization for desktop environments
+        if systemctl is-active --quiet graphical.target && pgrep -f "lightdm|gdm|sddm|lxdm" > /dev/null; then
+            print_step "Configuring X11 authorization for desktop environment"
+
+            # Find the primary user running the desktop session
+            local desktop_user=$(who | grep -E '(:0|tty7)' | head -1 | awk '{print $1}')
+            if [[ -z "$desktop_user" ]]; then
+                desktop_user="pi"  # Default to pi user
+            fi
+
+            print_step "Desktop user detected: $desktop_user"
+
+            # Grant ossuary user access to X session
+            if command -v xhost >/dev/null 2>&1; then
+                sudo -u "$desktop_user" DISPLAY=:0 xhost +SI:localuser:$OSSUARY_USER 2>/dev/null || true
+                print_step "Added ossuary user to X11 access list"
+            fi
+
+            # Handle X11 vs Wayland authorization
+            local desktop_home="/home/$desktop_user"
+            local is_wayland=false
+
+            # Detect if running Wayland
+            if [[ -n "$WAYLAND_DISPLAY" ]] || pgrep -f "labwc|wayfire|weston|sway" > /dev/null; then
+                is_wayland=true
+                print_step "Wayland session detected"
+            else
+                print_step "X11 session detected"
+            fi
+
+            if [[ "$is_wayland" == "true" ]]; then
+                # Wayland authorization setup
+                print_step "Configuring Wayland authorization"
+
+                # Add ossuary user to video and input groups for Wayland access
+                usermod -a -G video,input "$OSSUARY_USER" 2>/dev/null || true
+
+                # Set up Wayland environment variables for ossuary user
+                local wayland_display=""
+                if [[ -n "$WAYLAND_DISPLAY" ]]; then
+                    wayland_display="$WAYLAND_DISPLAY"
+                else
+                    wayland_display="wayland-0"  # Default
+                fi
+
+                # Create Wayland runtime directory for ossuary user
+                local ossuary_runtime="/run/user/$(id -u $OSSUARY_USER)"
+                if [[ ! -d "$ossuary_runtime" ]]; then
+                    mkdir -p "$ossuary_runtime"
+                    chown "$OSSUARY_USER:$OSSUARY_USER" "$ossuary_runtime"
+                    chmod 700 "$ossuary_runtime"
+                fi
+
+                # Copy Wayland socket permissions (if accessible)
+                local wayland_socket="/run/user/$(id -u $desktop_user)/$wayland_display"
+                if [[ -S "$wayland_socket" ]]; then
+                    # Grant access to Wayland socket via group permissions
+                    local wayland_group=$(stat -c '%G' "$wayland_socket" 2>/dev/null || echo "")
+                    if [[ -n "$wayland_group" ]]; then
+                        usermod -a -G "$wayland_group" "$OSSUARY_USER" 2>/dev/null || true
+                        print_step "Added ossuary user to Wayland group: $wayland_group"
+                    fi
+                fi
+
+                print_step "Wayland authorization configured"
+            else
+                # X11 authorization setup
+                if [[ -f "$desktop_home/.Xauthority" ]]; then
+                    sudo -u "$desktop_user" xauth extract - :0 2>/dev/null | sudo -u "$OSSUARY_USER" xauth merge - 2>/dev/null || true
+                    print_step "Copied X11 authority from $desktop_user to ossuary user"
+                fi
+            fi
+
+            # Update systemd services to use desktop user's display
+            print_step "Updating systemd services for desktop environment"
+
+            if [[ "$is_wayland" == "true" ]]; then
+                # Update services for Wayland
+                local wayland_display=""
+                if [[ -n "$WAYLAND_DISPLAY" ]]; then
+                    wayland_display="$WAYLAND_DISPLAY"
+                else
+                    wayland_display="wayland-0"
+                fi
+
+                # Update kiosk service for Wayland
+                if [[ -f "/etc/systemd/system/ossuary-kiosk.service" ]]; then
+                    cp "/etc/systemd/system/ossuary-kiosk.service" "/etc/systemd/system/ossuary-kiosk.service.backup"
+
+                    # Add Wayland environment variables
+                    if ! grep -q "WAYLAND_DISPLAY" "/etc/systemd/system/ossuary-kiosk.service"; then
+                        sed -i "/Environment=DISPLAY=:0/a Environment=WAYLAND_DISPLAY=$wayland_display" "/etc/systemd/system/ossuary-kiosk.service"
+                        sed -i "/Environment=WAYLAND_DISPLAY/a Environment=XDG_SESSION_TYPE=wayland" "/etc/systemd/system/ossuary-kiosk.service"
+                        sed -i "/Environment=XDG_SESSION_TYPE/a Environment=XDG_RUNTIME_DIR=/run/user/$(id -u $OSSUARY_USER)" "/etc/systemd/system/ossuary-kiosk.service"
+                    fi
+                    print_step "Updated kiosk service for Wayland"
+                fi
+
+                # Update API service for Wayland
+                if [[ -f "/etc/systemd/system/ossuary-api.service" ]]; then
+                    cp "/etc/systemd/system/ossuary-api.service" "/etc/systemd/system/ossuary-api.service.backup"
+
+                    # Add Wayland environment variables
+                    if ! grep -q "WAYLAND_DISPLAY" "/etc/systemd/system/ossuary-api.service"; then
+                        sed -i "/Environment=DISPLAY=:0/a Environment=WAYLAND_DISPLAY=$wayland_display" "/etc/systemd/system/ossuary-api.service"
+                        sed -i "/Environment=WAYLAND_DISPLAY/a Environment=XDG_SESSION_TYPE=wayland" "/etc/systemd/system/ossuary-api.service"
+                        sed -i "/Environment=XDG_SESSION_TYPE/a Environment=XDG_RUNTIME_DIR=/run/user/$(id -u $OSSUARY_USER)" "/etc/systemd/system/ossuary-api.service"
+                    fi
+                    print_step "Updated API service for Wayland"
+                fi
+            else
+                # Update services for X11
+                # Update kiosk service for desktop environment
+                if [[ -f "/etc/systemd/system/ossuary-kiosk.service" ]]; then
+                    # Backup original
+                    cp "/etc/systemd/system/ossuary-kiosk.service" "/etc/systemd/system/ossuary-kiosk.service.backup"
+
+                    # Update environment variables
+                    sed -i "s|Environment=XAUTHORITY=/home/ossuary/.Xauthority|Environment=XAUTHORITY=$desktop_home/.Xauthority|g" "/etc/systemd/system/ossuary-kiosk.service"
+                    print_step "Updated kiosk service X authority path"
+                fi
+
+                # Update API service for desktop environment
+                if [[ -f "/etc/systemd/system/ossuary-api.service" ]]; then
+                    # Backup original
+                    cp "/etc/systemd/system/ossuary-api.service" "/etc/systemd/system/ossuary-api.service.backup"
+
+                    # Update environment variables
+                    sed -i "s|Environment=XAUTHORITY=/home/ossuary/.Xauthority|Environment=XAUTHORITY=$desktop_home/.Xauthority|g" "/etc/systemd/system/ossuary-api.service"
+                    print_step "Updated API service X authority path"
+                fi
+            fi
         fi
     else
         print_warning "User home directory $OSSUARY_HOME does not exist"

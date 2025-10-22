@@ -304,6 +304,30 @@ class BrowserController:
             # Build command
             cmd = self._get_chromium_command(target_url)
 
+            # Log the complete command for debugging
+            self.logger.info("=" * 80)
+            self.logger.info("BROWSER STARTUP COMMAND:")
+            self.logger.info("=" * 80)
+            self.logger.info(f"Binary: {cmd[0]}")
+            self.logger.info("Flags:")
+            for i, flag in enumerate(cmd[1:], 1):
+                if flag.startswith('--'):
+                    self.logger.info(f"  [{i:2d}] {flag}")
+                else:
+                    self.logger.info(f"  [{i:2d}] {flag} (URL/value)")
+
+            # Log environment variables
+            self.logger.info("Environment:")
+            display_env = {k: v for k, v in env.items() if k in ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_SESSION_TYPE', 'XDG_RUNTIME_DIR']}
+            for key, value in display_env.items():
+                self.logger.info(f"  {key}={value}")
+
+            # Log the full command as a single line for easy copy/paste
+            cmd_str = ' '.join(f'"{arg}"' if ' ' in arg else arg for arg in cmd)
+            self.logger.info("Full command (copy/paste ready):")
+            self.logger.info(f"  {cmd_str}")
+            self.logger.info("=" * 80)
+
             # Start process
             self.process = subprocess.Popen(
                 cmd,
@@ -321,6 +345,23 @@ class BrowserController:
 
             self.logger.info(f"Browser started with PID: {self.pid}")
 
+            # Wait a moment and check if process started successfully
+            await asyncio.sleep(0.5)
+            if self.process.poll() is not None:
+                # Process already exited
+                try:
+                    stdout, stderr = self.process.communicate(timeout=1)
+                    self.logger.error("Browser process exited immediately!")
+                    self.logger.error(f"Exit code: {self.process.returncode}")
+                    if stdout:
+                        self.logger.error(f"STDOUT: {stdout.decode('utf-8', errors='ignore')}")
+                    if stderr:
+                        self.logger.error(f"STDERR: {stderr.decode('utf-8', errors='ignore')}")
+                except Exception as comm_e:
+                    self.logger.error(f"Could not read process output: {comm_e}")
+                self.is_running = False
+                return False
+
             # Start monitoring
             asyncio.create_task(self._monitor_process())
 
@@ -328,6 +369,11 @@ class BrowserController:
 
         except Exception as e:
             self.logger.error(f"Failed to start browser: {e}")
+            self.logger.error("=" * 80)
+            self.logger.error("BROWSER STARTUP FAILED")
+            self.logger.error("=" * 80)
+            import traceback
+            self.logger.error(f"Exception details: {traceback.format_exc()}")
             self.is_running = False
             return False
 
