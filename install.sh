@@ -604,6 +604,7 @@ create_directories() {
         "$DATA_DIR/chromium"
         "$CONFIG_DIR/ssl"
         "$CONFIG_DIR/backups"
+        "/var/log/ossuary"
     )
 
     for dir in "${dirs[@]}"; do
@@ -690,8 +691,12 @@ install_ossuary() {
     # Copy source files with error checking
     print_step "Copying source files..."
 
+    # Force overwrite existing files to ensure updates are applied
+    print_step "Copying source files (will overwrite existing)..."
+
     if [[ -d "$source_dir/src" ]] && [[ -n "$(ls -A "$source_dir/src" 2>/dev/null)" ]]; then
-        cp -r "$source_dir/src/"* "$INSTALL_DIR/src/" || { print_error "Failed to copy src files"; exit 1; }
+        cp -rf "$source_dir/src/"* "$INSTALL_DIR/src/" || { print_error "Failed to copy src files"; exit 1; }
+        print_step "Updated source files"
     elif [[ -d "$source_dir/src" ]]; then
         print_warning "Source src directory is empty, skipping"
     else
@@ -700,7 +705,8 @@ install_ossuary() {
     fi
 
     if [[ -d "$source_dir/web" ]] && [[ -n "$(ls -A "$source_dir/web" 2>/dev/null)" ]]; then
-        cp -r "$source_dir/web/"* "$INSTALL_DIR/web/" || { print_error "Failed to copy web files"; exit 1; }
+        cp -rf "$source_dir/web/"* "$INSTALL_DIR/web/" || { print_error "Failed to copy web files"; exit 1; }
+        print_step "Updated web files"
     elif [[ -d "$source_dir/web" ]]; then
         print_warning "Source web directory is empty, skipping"
     else
@@ -709,7 +715,18 @@ install_ossuary() {
     fi
 
     if [[ -d "$source_dir/config" ]] && [[ -n "$(ls -A "$source_dir/config" 2>/dev/null)" ]]; then
-        cp -r "$source_dir/config/"* "$CONFIG_DIR/" || { print_error "Failed to copy config files"; exit 1; }
+        # Only overwrite default config, preserve user config
+        if [[ -f "$source_dir/config/default.json" ]]; then
+            cp -f "$source_dir/config/default.json" "$CONFIG_DIR/" || { print_error "Failed to copy default config"; exit 1; }
+            print_step "Updated default configuration"
+        fi
+        # Copy other config files
+        for file in "$source_dir/config/"*; do
+            filename=$(basename "$file")
+            if [[ "$filename" != "default.json" && "$filename" != "config.json" ]]; then
+                cp -f "$file" "$CONFIG_DIR/" 2>/dev/null || true
+            fi
+        done
     elif [[ -d "$source_dir/config" ]]; then
         print_warning "Source config directory is empty, skipping"
     else
@@ -717,7 +734,10 @@ install_ossuary() {
     fi
 
     if [[ -d "$source_dir/systemd" ]] && [[ -n "$(ls -A "$source_dir/systemd" 2>/dev/null)" ]]; then
-        cp -r "$source_dir/systemd/"* "/etc/systemd/system/" || { print_error "Failed to copy systemd files"; exit 1; }
+        cp -rf "$source_dir/systemd/"* "/etc/systemd/system/" || { print_error "Failed to copy systemd files"; exit 1; }
+        print_step "Updated systemd service files"
+        # Reload systemd after updating service files
+        systemctl daemon-reload
     elif [[ -d "$source_dir/systemd" ]]; then
         print_warning "Source systemd directory is empty, skipping"
     else
@@ -726,7 +746,8 @@ install_ossuary() {
     fi
 
     if [[ -d "$source_dir/scripts/bin" ]] && [[ -n "$(ls -A "$source_dir/scripts/bin" 2>/dev/null)" ]]; then
-        cp -r "$source_dir/scripts/bin/"* "$INSTALL_DIR/bin/" || { print_error "Failed to copy bin files"; exit 1; }
+        cp -rf "$source_dir/scripts/bin/"* "$INSTALL_DIR/bin/" || { print_error "Failed to copy bin files"; exit 1; }
+        print_step "Updated binary files"
     elif [[ -d "$source_dir/scripts/bin" ]]; then
         print_warning "Source scripts/bin directory is empty, skipping"
     else
@@ -1145,28 +1166,55 @@ configure_services() {
     # Reload systemd to pick up new service files
     systemctl daemon-reload
 
+    # Verify critical display service setup
+    if ! check_display_service_setup; then
+        print_error "Display service setup failed - this will cause kiosk service to fail"
+        exit 1
+    fi
+
     # Enable Ossuary services
     local services=("ossuary-config" "ossuary-netd" "ossuary-api" "ossuary-portal" "ossuary-display" "ossuary-kiosk")
     local failed_services=()
 
     for service in "${services[@]}"; do
         if [[ -f "/etc/systemd/system/${service}.service" ]]; then
+            print_step "Configuring $service..."
+
             if systemctl enable "$service"; then
-                echo "Enabled $service"
-                # Start the service immediately (except kiosk which needs display service)
+                echo "✓ Enabled $service"
+
+                # Start the service immediately (except kiosk which needs display service first)
                 if [[ "$service" != "ossuary-kiosk" ]]; then
                     if systemctl start "$service"; then
-                        echo "Started $service"
+                        echo "✓ Started $service"
+
+                        # Special handling for display service
+                        if [[ "$service" == "ossuary-display" ]]; then
+                            sleep 3  # Give display service time to start X server
+                            if systemctl is-active "$service" &>/dev/null; then
+                                echo "✓ Display service is running"
+                            else
+                                print_error "Display service failed to start!"
+                                journalctl -u ossuary-display -n 10 --no-pager
+                                failed_services+=("$service")
+                            fi
+                        fi
                     else
-                        print_warning "Failed to start $service (will start on reboot)"
+                        print_warning "Failed to start $service"
+                        if [[ "$service" == "ossuary-display" ]]; then
+                            print_error "CRITICAL: Display service failed to start - kiosk will not work!"
+                            print_step "Display service logs:"
+                            journalctl -u ossuary-display -n 10 --no-pager || echo "No logs available"
+                        fi
+                        failed_services+=("$service")
                     fi
                 fi
             else
-                print_warning "Failed to enable $service"
+                print_error "Failed to enable $service"
                 failed_services+=("$service")
             fi
         else
-            print_warning "Service file for $service not found"
+            print_error "Service file for $service not found at /etc/systemd/system/${service}.service"
             failed_services+=("$service")
         fi
     done
@@ -1183,7 +1231,172 @@ configure_services() {
         (crontab -l 2>/dev/null || true; echo "*/5 * * * * $INSTALL_DIR/monitor.sh") | crontab - || print_warning "Failed to set up cron job"
     fi
 
-    print_success "Services configured"
+    # DNS configuration will be handled in post-install phase
+    print_step "DNS configuration scheduled for post-install phase..."
+
+    # Final verification of critical services
+    print_step "Final service verification..."
+
+    # Check that display service is enabled and can be started
+    if systemctl is-enabled ossuary-display &>/dev/null; then
+        echo "✓ Display service is enabled"
+    else
+        print_error "Display service is not enabled!"
+        systemctl enable ossuary-display
+        echo "✓ Enabled display service"
+    fi
+
+    # Check that kiosk service dependencies are correct
+    if systemctl is-enabled ossuary-kiosk &>/dev/null; then
+        echo "✓ Kiosk service is enabled"
+        # Verify kiosk service can see its dependencies
+        if systemctl list-dependencies ossuary-kiosk | grep -q ossuary-display; then
+            echo "✓ Kiosk service has display service dependency"
+        else
+            print_warning "Kiosk service dependency chain may be incomplete"
+        fi
+    else
+        print_error "Kiosk service is not enabled!"
+        systemctl enable ossuary-kiosk
+        echo "✓ Enabled kiosk service"
+    fi
+
+    print_success "Services configured and verified"
+}
+
+should_configure_dns_now() {
+    # Check if user is connected via SSH over WiFi
+    # If so, skip DNS config to prevent disconnection
+
+    if [[ -z "$SSH_CLIENT" && -z "$SSH_TTY" ]]; then
+        # Not an SSH session, safe to configure DNS
+        return 0
+    fi
+
+    # Check if SSH connection is over WiFi
+    local ssh_ip=$(echo $SSH_CLIENT | awk '{print $1}' 2>/dev/null || echo "")
+
+    # Check for active WiFi connections
+    if nmcli connection show --active 2>/dev/null | grep -q wifi; then
+        # There's an active WiFi connection and this is SSH - risky
+        return 1
+    fi
+
+    # Seems safe (ethernet or no active WiFi detected)
+    return 0
+}
+
+configure_captive_portal_dns() {
+    print_step "Setting up DNS for captive portal functionality..."
+
+    # Create NetworkManager configuration directory if it doesn't exist
+    mkdir -p /etc/NetworkManager/conf.d
+
+    # Configure NetworkManager to use dnsmasq for better captive portal support
+    cat > /etc/NetworkManager/conf.d/99-ossuary-dns.conf << 'EOF'
+[main]
+dns=dnsmasq
+
+[logging]
+level=INFO
+domains=CORE,DHCP,WIFI,IP4,IP6,AUTOIP4,DHCP6,PPP,WIFI_SCAN,RFC3484,AUDIT,VPN_PLUGIN,DBUS_PROPS,TEAM,CONCHECK,DCB,DISPATCH,AGENT_MANAGER,SETTINGS_PLUGIN,SUSPEND_RESUME,CORE,DEVICE,OLPC,INFINIBAND,FIREWALL,ADSL,BOND,VLAN,BRIDGE,DBUS_PROPS,WIFI_SCAN,SIM,CONCHECK,DISPATCHER,AUDIT,VPN_PLUGIN,OTHER
+
+EOF
+
+    # Create dnsmasq configuration for NetworkManager
+    mkdir -p /etc/NetworkManager/dnsmasq-shared.d
+
+    cat > /etc/NetworkManager/dnsmasq-shared.d/99-ossuary-captive.conf << 'EOF'
+# DNS configuration for captive portal
+# Redirect all DNS queries to the captive portal when in AP mode
+
+# Enable logging for debugging
+log-queries
+log-dhcp
+
+# Set cache size
+cache-size=1000
+
+# Faster DNS responses
+min-cache-ttl=60
+
+# Domain handling for captive portal
+# These domains are commonly used by devices to detect captive portals
+address=/connectivitycheck.gstatic.com/192.168.42.1
+address=/www.gstatic.com/192.168.42.1
+address=/clients3.google.com/192.168.42.1
+address=/captive.apple.com/192.168.42.1
+address=/www.apple.com/192.168.42.1
+address=/www.appleiphonecell.com/192.168.42.1
+address=/msftconnecttest.com/192.168.42.1
+address=/www.msftconnecttest.com/192.168.42.1
+
+EOF
+
+    # Disable the system dnsmasq service if it's running
+    # NetworkManager will manage its own dnsmasq instance
+    if systemctl is-active dnsmasq &>/dev/null; then
+        print_step "Disabling system dnsmasq (NetworkManager will manage its own)"
+        systemctl stop dnsmasq
+        systemctl disable dnsmasq
+    fi
+
+    print_success "DNS configured for captive portal"
+}
+
+check_display_service_setup() {
+    print_step "Verifying display service setup..."
+
+    # Check if ossuary-display binary exists and is executable
+    if [[ -f "/opt/ossuary/bin/ossuary-display" ]]; then
+        if [[ -x "/opt/ossuary/bin/ossuary-display" ]]; then
+            echo "✓ Display service binary exists and is executable"
+        else
+            print_error "Display service binary is not executable!"
+            chmod +x "/opt/ossuary/bin/ossuary-display"
+            echo "✓ Fixed display service binary permissions"
+        fi
+    else
+        print_error "Display service binary missing at /opt/ossuary/bin/ossuary-display"
+        print_error "This is a critical issue - kiosk will not work!"
+        return 1
+    fi
+
+    # Check if display service file exists
+    if [[ -f "/etc/systemd/system/ossuary-display.service" ]]; then
+        echo "✓ Display service file exists"
+    else
+        print_error "Display service file missing at /etc/systemd/system/ossuary-display.service"
+        return 1
+    fi
+
+    # Check if display service source exists
+    if [[ -f "/opt/ossuary/src/display/service.py" ]]; then
+        echo "✓ Display service source exists"
+    else
+        print_error "Display service source missing at /opt/ossuary/src/display/service.py"
+        return 1
+    fi
+
+    # Check Python virtual environment
+    if [[ -f "/opt/ossuary/venv/bin/python" ]]; then
+        echo "✓ Python virtual environment exists"
+    else
+        print_error "Python virtual environment missing at /opt/ossuary/venv"
+        return 1
+    fi
+
+    # Try to validate the service file
+    if systemctl cat ossuary-display >/dev/null 2>&1; then
+        echo "✓ Display service file is valid"
+    else
+        print_error "Display service file is invalid or not loaded"
+        systemctl daemon-reload
+        echo "✓ Reloaded systemd daemon"
+    fi
+
+    print_success "Display service setup verified"
+    return 0
 }
 
 configure_firewall() {
@@ -1328,8 +1541,128 @@ print_completion() {
     echo "  • Logs: ${BLUE}$LOG_DIR/${NC}"
     echo "  • Web interface: ${BLUE}http://ossuary.local${NC} (after setup)"
     echo ""
-    echo -e "${GREEN}A reboot is required to complete the installation.${NC}"
+
+    echo -e "${YELLOW}Phase 2 Operations (Automatic on Next Boot):${NC}"
+    echo "  • DNS configuration for captive portal"
+    echo "  • NetworkManager optimization"
+    echo "  • Final service startup"
+    echo "  • Second reboot"
     echo ""
+
+    echo -e "${GREEN}Installation Phase 1 complete. Phase 2 will run automatically.${NC}"
+    echo ""
+}
+
+create_post_install_helpers() {
+    print_step "Creating post-install helper functions..."
+
+    # Copy current install functions to temp file for post-install use
+    cat > /tmp/ossuary_install_functions.sh << 'EOF'
+# Helper functions for post-install operations
+
+log() {
+    echo "$(date): $1" | tee -a /var/log/ossuary-post-install.log
+}
+
+print_step() {
+    log "[INFO] $1"
+}
+
+print_success() {
+    log "[SUCCESS] $1"
+}
+
+print_warning() {
+    log "[WARNING] $1"
+}
+
+print_error() {
+    log "[ERROR] $1"
+}
+
+EOF
+
+    print_success "Post-install helpers created"
+}
+
+schedule_post_install_operations() {
+    print_step "Scheduling SSH-breaking operations for post-install..."
+
+    echo ""
+    echo -e "${YELLOW}===============================================${NC}"
+    echo -e "${YELLOW}          IMPORTANT NOTICE${NC}"
+    echo -e "${YELLOW}===============================================${NC}"
+    echo ""
+    echo -e "${RED}The following operations will break SSH connections:${NC}"
+    echo "  • DNS configuration for captive portal"
+    echo "  • NetworkManager restart"
+    echo "  • Final system reboot"
+    echo ""
+    echo -e "${CYAN}These operations will be performed automatically after reboot${NC}"
+    echo -e "${CYAN}and will continue even if SSH disconnects.${NC}"
+    echo ""
+    echo -e "${GREEN}The system will be fully configured after the second reboot.${NC}"
+    echo ""
+
+    # Create systemd service to run post-install operations on next boot
+    cat > /etc/systemd/system/ossuary-post-install.service << 'EOF'
+[Unit]
+Description=Ossuary Post-Install Operations
+After=multi-user.target network.target
+Before=ossuary-netd.service ossuary-portal.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ossuary/post-install.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Copy post-install script to installation directory
+    cp "$(dirname "$0")/post-install.sh" /opt/ossuary/post-install.sh || {
+        print_error "Failed to copy post-install script"
+        return 1
+    }
+    chmod +x /opt/ossuary/post-install.sh
+
+    # Enable the post-install service
+    systemctl enable ossuary-post-install.service
+
+    print_success "Post-install operations scheduled"
+}
+
+ask_post_install_reboot() {
+    echo ""
+    echo -e "${GREEN}================================================${NC}"
+    echo -e "${GREEN}         INSTALLATION PHASE 1 COMPLETE${NC}"
+    echo -e "${GREEN}================================================${NC}"
+    echo ""
+    echo -e "${CYAN}Phase 1 completed successfully! SSH-safe operations done.${NC}"
+    echo ""
+    echo -e "${YELLOW}Phase 2 (SSH-breaking operations) will run after reboot:${NC}"
+    echo "  • DNS configuration for captive portal"
+    echo "  • NetworkManager optimization"
+    echo "  • Final service enablement"
+    echo "  • Automatic second reboot"
+    echo ""
+    echo -e "${CYAN}After the second reboot, your system will be ready.${NC}"
+    echo -e "${CYAN}You can then connect to the 'ossuary-setup' WiFi network.${NC}"
+    echo ""
+
+    read -p "Reboot now to complete installation? (Y/n): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Nn]$ ]]; then
+        echo -e "${YELLOW}Please reboot manually when convenient: sudo reboot${NC}"
+        echo -e "${YELLOW}Post-install operations will run automatically on next boot.${NC}"
+        exit 0
+    fi
+
+    print_step "Rebooting to complete installation..."
+    reboot
 }
 
 ask_reboot() {
@@ -1396,17 +1729,23 @@ main() {
     # Install Ossuary Pi
     install_ossuary
 
-    # System configuration
+    # System configuration (SSH-safe operations only)
     configure_network_manager
     configure_display
     configure_services
     configure_firewall
     create_default_config
 
+    # Create SSH-safe helper functions for post-install
+    create_post_install_helpers
+
+    # Schedule SSH-breaking operations for post-install
+    schedule_post_install_operations
+
     # Cleanup and completion
     cleanup
     print_completion
-    ask_reboot
+    ask_post_install_reboot
 }
 
 # Cleanup function for failed installations

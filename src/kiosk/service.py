@@ -30,60 +30,111 @@ class KioskService:
         self.logger = self._setup_logging()
 
     def _setup_logging(self) -> logging.Logger:
-        """Set up logging."""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.StreamHandler(sys.stdout),
-                logging.handlers.SysLogHandler(address='/dev/log')
-            ]
+        """Set up comprehensive logging for kiosk service."""
+        # Create logger
+        logger = logging.getLogger(__name__)
+        logger.setLevel(logging.DEBUG)
+
+        # Prevent duplicate logs
+        if logger.handlers:
+            logger.handlers.clear()
+
+        # Create formatter with more detail
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - [PID:%(process)d] %(funcName)s:%(lineno)d - %(message)s'
         )
-        return logging.getLogger(__name__)
+
+        # Console handler for systemd journal
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+        # Syslog handler
+        try:
+            syslog_handler = logging.handlers.SysLogHandler(address='/dev/log', facility='daemon')
+            syslog_handler.setLevel(logging.INFO)
+            syslog_formatter = logging.Formatter('ossuary-kiosk[%(process)d]: %(levelname)s - %(message)s')
+            syslog_handler.setFormatter(syslog_formatter)
+            logger.addHandler(syslog_handler)
+        except Exception as e:
+            print(f"Failed to set up syslog handler: {e}")
+
+        # File handler for detailed debugging
+        try:
+            log_dir = Path("/var/log/ossuary")
+            log_dir.mkdir(exist_ok=True)
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_dir / "kiosk.log",
+                maxBytes=10*1024*1024,  # 10MB
+                backupCount=5
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+        except Exception as e:
+            print(f"Failed to set up file handler: {e}")
+
+        return logger
 
     async def start(self) -> None:
         """Start the kiosk service."""
         try:
+            self.logger.info("=" * 60)
             self.logger.info("Starting Ossuary Kiosk Service")
+            self.logger.info(f"Python: {sys.version}")
+            self.logger.info(f"PID: {os.getpid()}")
+            self.logger.info(f"User: {os.getuid()}/{os.getgid()}")
+            self.logger.info(f"Working directory: {os.getcwd()}")
+            self.logger.info("=" * 60)
 
             # Ensure we're running as the correct user
             await self._check_user_permissions()
 
             # Load configuration
+            self.logger.info("Loading configuration...")
             config = await self.config_manager.load_config()
             kiosk_config = config.kiosk.dict()
+            self.logger.info(f"Kiosk config loaded: {kiosk_config}")
 
             # Initialize kiosk manager
+            self.logger.info("Initializing kiosk manager...")
             self.kiosk_manager = KioskManager(kiosk_config)
 
             # Add configuration change callback
             self.kiosk_manager.add_url_change_callback(self._on_url_change)
 
             # Check system compatibility
+            self.logger.info("Checking system compatibility...")
             compatibility = await self.kiosk_manager.check_system_compatibility()
             self._log_compatibility_check(compatibility)
 
             # Initialize and start kiosk
+            self.logger.info("Initializing kiosk...")
             if await self.kiosk_manager.initialize():
                 # Determine initial URL
                 initial_url = await self._determine_initial_url(config)
+                self.logger.info(f"Starting kiosk with URL: {initial_url}")
 
                 if await self.kiosk_manager.start(initial_url):
                     self.running = True
+                    self.logger.info("Kiosk started successfully, entering main loop")
                     await self._run_main_loop()
                 else:
-                    self.logger.error("Failed to start kiosk")
+                    self.logger.error("Failed to start kiosk - kiosk manager start() returned False")
                     sys.exit(1)
             else:
-                self.logger.error("Failed to initialize kiosk")
+                self.logger.error("Failed to initialize kiosk - kiosk manager initialize() returned False")
                 sys.exit(1)
 
         except Exception as e:
-            self.logger.error(f"Failed to start service: {e}")
+            self.logger.error(f"Failed to start service: {e}", exc_info=True)
             raise
 
     async def _check_user_permissions(self) -> None:
         """Check user permissions and environment."""
+        self.logger.info("Checking user permissions and environment...")
+
         # Check if we have access to display
         display = os.environ.get("DISPLAY", ":0")
         if not display:
@@ -93,17 +144,52 @@ class KioskService:
         # Check X authority
         xauth = os.environ.get("XAUTHORITY")
         if not xauth:
+            self.logger.info("XAUTHORITY not set, checking common locations...")
             # Try common locations
             user_home = Path.home()
             xauth_file = user_home / ".Xauthority"
             if xauth_file.exists():
                 os.environ["XAUTHORITY"] = str(xauth_file)
+                self.logger.info(f"Found X authority file: {xauth_file}")
+            else:
+                self.logger.warning("No X authority file found")
+
+        # Check if X server is responding
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["xset", "q"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                env=os.environ
+            )
+            if result.returncode == 0:
+                self.logger.info("X server is responding")
+            else:
+                self.logger.error(f"X server check failed: {result.stderr}")
+        except subprocess.TimeoutExpired:
+            self.logger.error("X server check timed out")
+        except Exception as e:
+            self.logger.error(f"Failed to check X server: {e}")
 
         # Log user and environment info
         user = os.getenv("USER", "unknown")
-        self.logger.info(f"Running as user: {user}")
+        home = os.getenv("HOME", "unknown")
+        self.logger.info(f"Running as user: {user} (home: {home})")
         self.logger.info(f"DISPLAY: {os.environ.get('DISPLAY')}")
         self.logger.info(f"XAUTHORITY: {os.environ.get('XAUTHORITY', 'not set')}")
+
+        # Check if we can access the display
+        try:
+            import tkinter
+            root = tkinter.Tk()
+            root.withdraw()  # Hide the window
+            root.destroy()
+            self.logger.info("Display access test successful")
+        except Exception as e:
+            self.logger.error(f"Display access test failed: {e}")
+            self.logger.error("Kiosk may not be able to start - check X11 permissions")
 
     def _log_compatibility_check(self, compatibility: Dict[str, Any]) -> None:
         """Log system compatibility check results."""
