@@ -738,13 +738,14 @@ EOF
         print_step "Desktop environment detected - skipping X11 auto-start configuration"
     fi
 
-        # Set up X authority permissions
+    # Set up X authority permissions
+    if [[ -d "$OSSUARY_HOME" ]]; then
         if [[ ! -f "$OSSUARY_HOME/.Xauthority" ]]; then
             touch "$OSSUARY_HOME/.Xauthority"
             chown "$OSSUARY_USER:$OSSUARY_USER" "$OSSUARY_HOME/.Xauthority"
             chmod 600 "$OSSUARY_HOME/.Xauthority"
         fi
-    elif [[ ! -d "$OSSUARY_HOME" ]]; then
+    else
         print_warning "User home directory $OSSUARY_HOME does not exist"
     fi
 
