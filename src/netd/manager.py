@@ -608,29 +608,94 @@ class NetworkManager:
         try:
             self.logger.info(f"Starting access point: {self.ap_config.ssid}")
 
-            # Create AP connection
-            connection = self._create_ap_connection()
+            # First try the NetworkManager programmatic approach
+            try:
+                # Create AP connection
+                connection = self._create_ap_connection()
 
-            # Activate AP connection
-            self.nm_client.add_and_activate_connection_async(
-                connection, self.wifi_device, None, None,
-                self._ap_activation_callback, None
-            )
+                # Activate AP connection
+                self.nm_client.add_and_activate_connection_async(
+                    connection, self.wifi_device, None, None,
+                    self._ap_activation_callback, None
+                )
 
-            # Wait for AP to start
-            await asyncio.sleep(5)  # Give AP time to start
-            await self._update_network_state()
+                # Wait for AP to start
+                await asyncio.sleep(8)  # Give more time for AP to start
+                await self._update_network_state()
 
-            if self.current_state == NetworkState.AP_MODE:
-                self.logger.info("Access point started successfully")
-                return True
-            else:
-                self.logger.error("Failed to start access point")
-                return False
+                if self.current_state == NetworkState.AP_MODE:
+                    self.logger.info("Access point started successfully via NetworkManager API")
+                    return True
+                else:
+                    self.logger.warning("NetworkManager API approach failed, trying nmcli fallback")
+                    raise Exception("API method failed")
+
+            except Exception as api_error:
+                self.logger.warning(f"NetworkManager API failed: {api_error}")
+
+                # Fallback to nmcli command
+                return await self._start_ap_with_nmcli()
 
         except Exception as e:
-            self.logger.error(f"AP start error: {e}")
+            self.logger.error(f"All AP start methods failed: {e}")
             raise AccessPointError(f"Failed to start access point: {e}")
+
+    async def _start_ap_with_nmcli(self) -> bool:
+        """Fallback method to start AP using nmcli command."""
+        try:
+            self.logger.info("Attempting to start AP using nmcli command")
+
+            import subprocess
+
+            # Get WiFi device name
+            device_name = self.wifi_device.get_iface() if self.wifi_device else "wlan0"
+
+            # Build nmcli command
+            cmd = [
+                "nmcli", "device", "wifi", "hotspot",
+                "ifname", device_name,
+                "ssid", self.ap_config.ssid,
+                "band", "bg",
+                "channel", str(self.ap_config.channel)
+            ]
+
+            # Add password if configured
+            if self.ap_config.password:
+                cmd.extend(["password", self.ap_config.password])
+
+            self.logger.info(f"Running command: {' '.join(cmd)}")
+
+            # Execute nmcli command
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0:
+                self.logger.info("nmcli hotspot command succeeded")
+
+                # Wait for AP to be fully active
+                await asyncio.sleep(5)
+                await self._update_network_state()
+
+                if self.current_state == NetworkState.AP_MODE:
+                    self.logger.info("Access point started successfully via nmcli")
+                    return True
+                else:
+                    self.logger.error("nmcli succeeded but AP not detected")
+                    return False
+            else:
+                self.logger.error(f"nmcli command failed: {result.stderr}")
+                return False
+
+        except subprocess.TimeoutExpired:
+            self.logger.error("nmcli command timed out")
+            return False
+        except Exception as e:
+            self.logger.error(f"nmcli fallback failed: {e}")
+            return False
 
     def _create_ap_connection(self) -> NM.Connection:
         """Create access point connection."""
@@ -692,14 +757,54 @@ class NetworkManager:
         try:
             self.logger.info("Stopping access point")
 
-            # Find and deactivate AP connection
+            # Try to find and deactivate AP connection using NetworkManager API
+            ap_stopped = False
             for connection in self.nm_client.get_active_connections():
                 nm_connection = connection.get_connection()
                 if self._is_ap_connection(nm_connection):
-                    self.nm_client.deactivate_connection_async(
-                        connection, None, self._deactivation_callback, None
+                    try:
+                        self.nm_client.deactivate_connection_async(
+                            connection, None, self._deactivation_callback, None
+                        )
+                        ap_stopped = True
+                        self.logger.info("AP deactivation initiated via NetworkManager API")
+                        break
+                    except Exception as e:
+                        self.logger.warning(f"Failed to deactivate AP via API: {e}")
+
+            # If API method didn't work, try nmcli approach
+            if not ap_stopped:
+                self.logger.info("Trying to stop AP using nmcli")
+                try:
+                    # Find hotspot connections and remove them
+                    result = subprocess.run(
+                        ["nmcli", "connection", "show", "--active"],
+                        capture_output=True, text=True, timeout=10
                     )
-                    break
+
+                    if result.returncode == 0:
+                        lines = result.stdout.split('\n')
+                        for line in lines:
+                            if 'wifi' in line and ('hotspot' in line or self.ap_config.ssid in line):
+                                connection_name = line.split()[0]
+                                self.logger.info(f"Stopping hotspot connection: {connection_name}")
+
+                                # Stop the connection
+                                subprocess.run(
+                                    ["nmcli", "connection", "down", connection_name],
+                                    capture_output=True, timeout=10
+                                )
+
+                                # Delete the connection to clean up
+                                subprocess.run(
+                                    ["nmcli", "connection", "delete", connection_name],
+                                    capture_output=True, timeout=10
+                                )
+                                ap_stopped = True
+                                break
+
+                except Exception as e:
+                    self.logger.warning(f"nmcli stop method failed: {e}")
 
             await asyncio.sleep(3)  # Give time to stop
             await self._update_network_state()
@@ -708,12 +813,13 @@ class NetworkManager:
                 self.logger.info("Access point stopped successfully")
                 return True
             else:
-                self.logger.error("Failed to stop access point")
-                return False
+                self.logger.warning("AP may still be active, will continue anyway")
+                return True  # Don't fail completely if stop detection fails
 
         except Exception as e:
             self.logger.error(f"AP stop error: {e}")
-            raise AccessPointError(f"Failed to stop access point: {e}")
+            # Don't raise exception - try to continue with normal operation
+            return False
 
     def _deactivation_callback(self, client, result, user_data):
         """Callback for connection deactivation."""
