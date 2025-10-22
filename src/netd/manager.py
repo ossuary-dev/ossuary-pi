@@ -119,8 +119,8 @@ class NetworkManager:
                     continue
 
             if not self.wifi_device:
-                self.logger.warning("No WiFi device found via sdbus, falling back to GI")
-                raise InterfaceError("No WiFi device found")
+                self.logger.warning("No WiFi device found via sdbus - running in wired-only mode")
+                # Don't raise an error, continue without WiFi capability
 
         except Exception as e:
             self.logger.error(f"Failed to initialize sdbus client: {e}")
@@ -133,7 +133,10 @@ class NetworkManager:
             self.wifi_device = self._get_wifi_device()
 
             if not self.wifi_device:
-                raise InterfaceError("No WiFi device found")
+                self.logger.warning("No WiFi device found - running in wired-only mode")
+                # Don't raise an error, just continue without WiFi capability
+            else:
+                self.logger.info(f"Found WiFi device: {self.wifi_device.get_iface()}")
 
         except Exception as e:
             self.logger.error(f"Failed to initialize GI client: {e}")
@@ -172,12 +175,15 @@ class NetworkManager:
     def _setup_signal_handlers(self) -> None:
         """Set up NetworkManager signal handlers."""
         self.nm_client.connect('device-state-changed', self._on_device_state_changed)
-        self.wifi_device.connect('access-point-added', self._on_access_point_added)
-        self.wifi_device.connect('access-point-removed', self._on_access_point_removed)
+        if self.wifi_device:
+            self.wifi_device.connect('access-point-added', self._on_access_point_added)
+            self.wifi_device.connect('access-point-removed', self._on_access_point_removed)
+        else:
+            self.logger.debug("No WiFi device available - skipping WiFi signal handlers")
 
     def _on_device_state_changed(self, client, device, new_state, old_state, reason):
         """Handle device state changes."""
-        if device == self.wifi_device:
+        if self.wifi_device and device == self.wifi_device:
             asyncio.create_task(self._update_network_state())
 
     def _on_access_point_added(self, device, access_point):
@@ -196,6 +202,18 @@ class NetworkManager:
     async def _update_network_state(self) -> None:
         """Update internal network state."""
         try:
+            if not self.wifi_device:
+                # No WiFi device - set to disconnected state
+                self.current_state = NetworkState.DISCONNECTED
+                self.last_status = NetworkStatus(
+                    state=NetworkState.DISCONNECTED,
+                    ssid=None,
+                    ip_address=None,
+                    interface="wired-only",
+                    signal_strength=0
+                )
+                return
+
             device_state = self.wifi_device.get_state()
             active_connection = self.wifi_device.get_active_connection()
 
@@ -328,6 +346,10 @@ class NetworkManager:
 
     async def scan_networks(self) -> List[WiFiNetwork]:
         """Scan for available WiFi networks."""
+        if not self.wifi_device:
+            self.logger.warning("Cannot scan networks - no WiFi device available")
+            return []
+
         try:
             self.logger.info("Scanning for WiFi networks")
 
@@ -445,6 +467,10 @@ class NetworkManager:
 
     async def connect_to_network(self, ssid: str, password: Optional[str] = None) -> bool:
         """Connect to a WiFi network."""
+        if not self.wifi_device:
+            self.logger.warning("Cannot connect to network - no WiFi device available")
+            return False
+
         try:
             self.logger.info(f"Connecting to network: {ssid}")
             self.last_connection_attempt = datetime.now()

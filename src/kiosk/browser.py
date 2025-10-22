@@ -216,6 +216,10 @@ class BrowserController:
                     "--enable-webgl",
                     "--enable-webgl2-compute-context",
                 ])
+            else:
+                cmd.extend([
+                    "--disable-webgl",
+                ])
 
             # WebGPU specific flags (experimental)
             if self.enable_webgpu:
@@ -223,11 +227,10 @@ class BrowserController:
                     "--enable-unsafe-webgpu",
                     "--enable-features=WebGPU",
                 ])
-        else:
-            cmd.extend([
-                "--disable-gpu",
-                "--disable-webgl",
-            ])
+            else:
+                cmd.extend([
+                    "--disable-webgpu",
+                ])
 
         # Security flags - conditional based on environment (2025 security fix)
         cmd.extend(self._get_security_flags())
