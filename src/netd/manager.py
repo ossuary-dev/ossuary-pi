@@ -55,8 +55,8 @@ class NetworkManager:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-        # NetworkManager client - choose implementation
-        self.use_sdbus = SDBUS_AVAILABLE
+        # NetworkManager client - prefer GI for better Pi compatibility
+        self.use_sdbus = SDBUS_AVAILABLE and not GI_AVAILABLE
         self.nm_client = None
         self.wifi_device = None
 
@@ -167,10 +167,18 @@ class NetworkManager:
 
     def _get_wifi_device(self) -> Optional[NM.DeviceWifi]:
         """Get the first WiFi device."""
+        wifi_devices = []
         for device in self.nm_client.get_devices():
             if device.get_device_type() == NM.DeviceType.WIFI:
-                return device
-        return None
+                wifi_devices.append(device)
+                self.logger.debug(f"Found WiFi device: {device.get_iface()}")
+
+        if wifi_devices:
+            self.logger.info(f"Found {len(wifi_devices)} WiFi device(s)")
+            return wifi_devices[0]
+        else:
+            self.logger.debug("No WiFi devices found via NetworkManager")
+            return None
 
     def _setup_signal_handlers(self) -> None:
         """Set up NetworkManager signal handlers."""
@@ -628,8 +636,15 @@ class NetworkManager:
         s_ip4.set_property(NM.SETTING_IP_CONFIG_METHOD, NM.SETTING_IP4_CONFIG_METHOD_SHARED)
 
         # Add static IP for the AP
-        addr = NM.IPAddress.new(4, self.ap_config.ip_address, 24)
-        s_ip4.add_address(addr)
+        try:
+            addr = NM.IPAddress.new(4, self.ap_config.ip_address, 24)
+            if addr is None:
+                self.logger.error(f"Failed to create IP address object for {self.ap_config.ip_address}")
+                raise AccessPointError("Failed to create IP address configuration")
+            s_ip4.add_address(addr)
+        except Exception as e:
+            self.logger.error(f"IP address configuration error: {e}")
+            raise AccessPointError(f"Failed to configure IP address: {e}")
 
         connection.add_setting(s_ip4)
 

@@ -170,6 +170,11 @@ class DisplayManager:
     async def _start_x_server(self) -> bool:
         """Start X server."""
         try:
+            # Check if X server is already running
+            if await self._is_x_server_running():
+                self.logger.info("X server already running, skipping start")
+                return True
+
             self.logger.info("Starting X server")
 
             # Create X server command

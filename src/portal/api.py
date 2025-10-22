@@ -29,7 +29,15 @@ class APIRouter:
         self.network_manager = network_manager
         self.config_manager = config_manager
         self.logger = logging.getLogger(__name__)
-        self.router = APIRouter(prefix="/api/v1")
+        # Import here to avoid name conflict
+        from fastapi import APIRouter as FastAPIRouter
+        # Create router (prefix parameter added in newer FastAPI versions)
+        try:
+            self.router = FastAPIRouter(prefix="/api/v1")
+        except TypeError:
+            # Fallback for older FastAPI versions
+            self.router = FastAPIRouter()
+            self.prefix = "/api/v1"
         self._setup_routes()
 
     def _setup_routes(self):
