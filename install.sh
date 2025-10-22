@@ -45,6 +45,7 @@ REQUIRED_PACKAGES=(
     "python3-gi-cairo"
     "libcairo2-dev"
     "libgirepository1.0-dev"
+    "gir1.2-nm-1.0"
     "xinit"
     "xserver-xorg-legacy"
 )

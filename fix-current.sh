@@ -36,11 +36,11 @@ if [[ -d "/home/lc/Documents/ossuary-pi/systemd" ]]; then
     print_success "Systemd services updated"
 fi
 
-# 2. Install missing X11 packages
-print_step "Installing missing X11 packages..."
+# 2. Install missing packages
+print_step "Installing missing packages..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y xinit xserver-xorg-legacy
+apt-get install -y xinit xserver-xorg-legacy gir1.2-nm-1.0
 print_success "X11 packages installed"
 
 # 3. Set up X11 auto-start

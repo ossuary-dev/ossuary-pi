@@ -48,7 +48,7 @@ class KioskConfigRequest(BaseModel):
 
 class SystemAction(BaseModel):
     """System action request."""
-    action: str = Field(..., regex="^(restart|shutdown|reload)$", description="Action to perform")
+    action: str = Field(..., pattern="^(restart|shutdown|reload)$", description="Action to perform")
 
 
 # Response models

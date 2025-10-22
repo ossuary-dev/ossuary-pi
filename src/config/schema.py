@@ -9,7 +9,7 @@ class SystemConfig(BaseModel):
     """System-level configuration."""
     hostname: str = Field(default="ossuary", min_length=1, max_length=63)
     timezone: str = Field(default="UTC")
-    log_level: str = Field(default="INFO", regex="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
+    log_level: str = Field(default="INFO", pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 
 
 class NetworkConfig(BaseModel):

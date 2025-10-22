@@ -82,7 +82,7 @@ install_missing_packages() {
     print_step "Installing any missing system packages..."
 
     local missing_packages=()
-    local required_packages=("xinit" "xserver-xorg-legacy")
+    local required_packages=("xinit" "xserver-xorg-legacy" "gir1.2-nm-1.0")
 
     for package in "${required_packages[@]}"; do
         if ! dpkg -l | grep -q "^ii  $package "; then
