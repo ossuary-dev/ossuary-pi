@@ -17,8 +17,8 @@ from .models import (
     NetworkInfo, NetworkStatus, NetworkScanResponse, NetworkListResponse,
     KioskConfig, SystemInfo, APIResponse, ErrorResponse
 )
-from ..netd import NetworkManager as NetManager
-from ..config import ConfigManager
+from netd import NetworkManager as NetManager
+from config import ConfigManager
 
 
 class APIRouter:

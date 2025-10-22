@@ -73,7 +73,7 @@ class PortalConfig(BaseModel):
     ssl_cert_path: str = Field(default="/etc/ossuary/ssl/cert.pem")
     ssl_key_path: str = Field(default="/etc/ossuary/ssl/key.pem")
     title: str = Field(default="Ossuary Setup", min_length=1, max_length=100)
-    theme: str = Field(default="dark", regex="^(light|dark)$")
+    theme: str = Field(default="dark", pattern="^(light|dark)$")
 
 
 class RateLimitConfig(BaseModel):

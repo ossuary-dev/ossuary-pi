@@ -8,7 +8,7 @@ from datetime import datetime
 
 from .browser import BrowserController
 from .display import DisplayManager
-from ..config import ConfigManager
+from config import ConfigManager
 
 
 class KioskManager:

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Dict, Any
 
 from .manager import KioskManager
-from ..config import ConfigManager
+from config import ConfigManager
 
 
 class KioskService:

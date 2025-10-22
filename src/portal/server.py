@@ -17,8 +17,8 @@ import uvicorn
 
 from .api import APIRouter
 from .models import ErrorResponse
-from ..netd import NetworkManager as NetManager
-from ..config import ConfigManager
+from netd import NetworkManager as NetManager
+from config import ConfigManager
 
 
 class PortalServer:

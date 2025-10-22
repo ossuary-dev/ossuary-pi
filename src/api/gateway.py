@@ -15,10 +15,10 @@ import uvicorn
 
 from .websocket import WebSocketManager
 from .middleware import AuthMiddleware, RateLimitMiddleware
-from ..config import ConfigManager
-from ..netd import NetworkManager as NetManager
-from ..kiosk import KioskManager
-from ..portal.models import (
+from config import ConfigManager
+from netd import NetworkManager as NetManager
+from kiosk import KioskManager
+from portal.models import (
     NetworkScanRequest, NetworkConnectRequest, KioskConfigRequest,
     APIResponse, ErrorResponse, SystemInfo
 )

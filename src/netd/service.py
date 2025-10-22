@@ -16,7 +16,7 @@ from typing import Dict, Any
 
 from .manager import NetworkManager
 from .states import NetworkState
-from ..config import ConfigManager
+from config import ConfigManager
 
 
 class NetworkService:

@@ -28,12 +28,38 @@ fi
 
 print_step "Applying critical fixes to current installation..."
 
-# 1. Copy updated systemd files if available locally
-if [[ -d "/home/lc/Documents/ossuary-pi/systemd" ]]; then
-    print_step "Updating systemd service files..."
-    cp /home/lc/Documents/ossuary-pi/systemd/*.service /etc/systemd/system/
-    systemctl daemon-reload
-    print_success "Systemd services updated"
+# 1. Copy ALL updated files if available locally
+if [[ -d "/home/lc/Documents/ossuary-pi" ]]; then
+    print_step "Updating all Ossuary files..."
+
+    # Update systemd service files
+    if [[ -d "/home/lc/Documents/ossuary-pi/systemd" ]]; then
+        cp /home/lc/Documents/ossuary-pi/systemd/*.service /etc/systemd/system/
+        systemctl daemon-reload
+        print_success "Systemd services updated"
+    fi
+
+    # Update source code (this fixes the Pydantic and import issues)
+    if [[ -d "/home/lc/Documents/ossuary-pi/src" ]]; then
+        cp -r /home/lc/Documents/ossuary-pi/src/* /opt/ossuary/src/
+        print_success "Source code updated (fixes Pydantic regex and import issues)"
+    fi
+
+    # Update scripts
+    if [[ -d "/home/lc/Documents/ossuary-pi/scripts" ]]; then
+        if [[ -d "/home/lc/Documents/ossuary-pi/scripts/bin" ]]; then
+            cp -r /home/lc/Documents/ossuary-pi/scripts/bin/* /opt/ossuary/bin/
+            chmod +x /opt/ossuary/bin/*
+        fi
+        if [[ -f "/home/lc/Documents/ossuary-pi/scripts/ossuaryctl" ]]; then
+            cp /home/lc/Documents/ossuary-pi/scripts/ossuaryctl /usr/local/bin/
+            chmod +x /usr/local/bin/ossuaryctl
+        fi
+        print_success "Scripts updated"
+    fi
+else
+    print_warning "Local ossuary-pi directory not found at /home/lc/Documents/ossuary-pi"
+    print_step "You may need to git pull the latest changes first"
 fi
 
 # 2. Install missing packages

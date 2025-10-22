@@ -138,7 +138,10 @@ update_code() {
 
     # Update source files
     if [[ -d "$temp_dir/src" ]]; then
-        cp -r "$temp_dir/src/"* "$INSTALL_DIR/src/"
+        # Ensure the source directory exists and copy all files including hidden ones
+        mkdir -p "$INSTALL_DIR/src"
+        cp -r "$temp_dir/src/"* "$INSTALL_DIR/src/" 2>/dev/null || true
+        cp -r "$temp_dir/src/."* "$INSTALL_DIR/src/" 2>/dev/null || true
         print_success "Updated source files"
     fi
 
