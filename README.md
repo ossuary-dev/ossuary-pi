@@ -1,148 +1,146 @@
-# Ossuary Pi - Simplified Captive Portal System
+# Ossuary Pi
 
-A lightweight Raspberry Pi configuration system that provides WiFi setup via captive portal and manages a user-defined startup command with automatic restart on failure.
+A WiFi failover system for Raspberry Pi that automatically creates a configuration portal when network connection is lost.
 
-## Features
+## What It Does
 
-- **Automatic WiFi Management**: Monitors WiFi connectivity and falls back to captive portal when disconnected
-- **Web-Based Configuration**: Simple web interface for WiFi setup and startup command configuration
-- **Auto-Restart Service**: User-defined command runs at startup with automatic restart on failure
-- **Captive Portal**: Fully integrated with [raspi-captive-portal](https://github.com/Splines/raspi-captive-portal) for professional AP management
+- Monitors WiFi connectivity continuously
+- When WiFi fails for 60+ seconds, launches a captive portal
+- Provides web interface to configure new WiFi networks
+- Manages a user-defined startup command with auto-restart
+- Built on top of [raspi-captive-portal](https://github.com/Splines/raspi-captive-portal)
+
+## Requirements
+
+- Raspberry Pi with WiFi (tested on Pi 4 & 5)
+- Raspberry Pi OS (Bullseye or newer)
+- Python 3.7+
+- Git
+
+## Quick Start
+
+```bash
+# Clone with submodules
+git clone --recursive https://github.com/yourusername/ossuary-pi.git
+cd ossuary-pi
+
+# Check requirements
+./check-requirements.sh
+
+# Install
+sudo ./install.sh
+
+# Test installation
+sudo ./test.sh
+```
 
 ## How It Works
 
-1. **WiFi Monitor Service**: Continuously checks network connectivity
-2. **Fallback Logic**: If WiFi connection fails:
-   - Attempts to reconnect to known networks
-   - Launches captive portal if no known networks available
-3. **Configuration Portal**: Accessible at `http://192.168.4.1:8080` when in AP mode
-4. **Startup Command**: Runs user-defined command as a systemd service with auto-restart
+1. **Normal Operation**: Device connects to known WiFi networks normally
+2. **Connection Lost**: Monitor detects loss of internet connectivity
+3. **Failover**: After 60 seconds, starts access point mode
+4. **Configuration**: Users connect to "Ossuary-Setup" and configure WiFi
+5. **Recovery**: Once configured, returns to normal WiFi mode
 
-## Installation
+## Configuration Portal
 
-### Integrated Installation (Recommended)
-Uses the proven `raspi-captive-portal` project for AP management:
+When in AP mode:
+- SSID: `Ossuary-Setup` (open network)
+- URL: `http://192.168.4.1:8080`
 
-1. **Check Requirements**:
-```bash
-./check-requirements.sh
-```
-
-2. **Install with Integration**:
-```bash
-sudo ./install-integrated.sh
-```
-
-This will:
-- Install and configure `raspi-captive-portal` automatically
-- Set up our Flask configuration interface on top
-- Handle all the complex AP/hostapd/dnsmasq configuration for you
-
-### Alternative Installations
-
-- `sudo ./install.sh` - Original manual configuration
-- `sudo ./install-v2.sh` - NetworkManager-based for Pi OS 2025
-
-## Uninstallation
-
-To completely remove Ossuary from your system:
-```bash
-sudo ./uninstall.sh
-```
-
-## Configuration
-
-### Via Captive Portal
-
-1. When no WiFi is available, connect to the `Ossuary-Setup` network
-2. Navigate to `http://192.168.4.1:8080`
-3. Configure:
-   - WiFi networks (scan and connect)
-   - Startup command (any command to run at boot)
-
-### Manual Configuration
-
-Configuration is stored in `/etc/ossuary/config.json`:
-
-```json
-{
-  "startup_command": "chromium-browser --kiosk https://example.com",
-  "wifi_networks": [
-    {"ssid": "NetworkName", "password": "password123"}
-  ]
-}
-```
-
-## Services
-
-- **ossuary-wifi-monitor**: Monitors WiFi and manages captive portal
-- **ossuary-captive-portal**: Web configuration interface
-- **ossuary-startup**: Runs user-defined startup command
-
-## System Requirements
-
-- Raspberry Pi with WiFi capability
-- Raspberry Pi OS (Bullseye or newer)
-- Python 3.7+
+Features:
+- Scan for WiFi networks
+- Connect to WPA/WPA2 networks
+- Configure startup command
+- View connection status
 
 ## File Structure
 
 ```
 /opt/ossuary/
+├── venv/                 # Python virtual environment
 ├── services/
-│   └── wifi_monitor.py     # WiFi monitoring service
+│   └── monitor.py        # WiFi monitoring service
 └── web/
-    ├── app.py              # Flask web application
-    └── templates/          # HTML templates
+    ├── app.py           # Flask web interface
+    └── templates/       # HTML templates
 
 /etc/ossuary/
-└── config.json             # System configuration
-
-/etc/systemd/system/
-├── ossuary-wifi-monitor.service
-├── ossuary-captive-portal.service
-└── ossuary-startup.service
+└── config.json          # Configuration storage
 ```
 
-## Startup Command Examples
+## Commands
 
-- **Kiosk Mode**: `chromium-browser --kiosk --noerrdialogs https://example.com`
-- **Python Script**: `python3 /home/pi/my_application.py`
-- **Shell Script**: `/home/pi/scripts/startup.sh`
-- **Node Application**: `node /home/pi/app/server.js`
+```bash
+# Check service status
+sudo systemctl status ossuary-monitor
+
+# View logs
+sudo journalctl -fu ossuary-monitor
+
+# Force AP mode (for testing)
+sudo systemctl stop wpa_supplicant
+
+# Restart normal WiFi
+sudo systemctl restart wpa_supplicant
+
+# Run tests
+sudo ./test.sh
+```
 
 ## Troubleshooting
 
-### Check Service Status
+### Can't Connect to Portal
 
+1. Check if AP is active:
 ```bash
-sudo systemctl status ossuary-wifi-monitor
-sudo systemctl status ossuary-captive-portal
-sudo systemctl status ossuary-startup
+sudo systemctl status hostapd
 ```
 
-### View Logs
-
+2. Check Flask app:
 ```bash
-sudo journalctl -u ossuary-wifi-monitor -f
-sudo journalctl -u ossuary-captive-portal -f
-sudo journalctl -u ossuary-startup -f
+sudo journalctl -fu ossuary-monitor | grep app.py
 ```
 
-### Manual Control
+3. Verify IP configuration:
+```bash
+ip addr show wlan0
+```
+
+### WiFi Won't Reconnect
 
 ```bash
-# Start/stop captive portal
-sudo systemctl start ossuary-captive-portal
-sudo systemctl stop ossuary-captive-portal
-
-# Restart WiFi monitor
-sudo systemctl restart ossuary-wifi-monitor
-
-# Restart startup command
-sudo systemctl restart ossuary-startup
+# Restore normal operation
+sudo ./fix-captive-portal.sh
 ```
+
+### Installation Issues
+
+- If installing over SSH, the script will warn you
+- Services won't auto-start over SSH (reboot required)
+- Check logs: `/tmp/ossuary-install.log`
+
+## Uninstall
+
+```bash
+sudo ./uninstall.sh
+```
+
+This will:
+- Stop all services
+- Remove installed files
+- Restore network configuration
+- Clean up firewall rules
+
+## How the Integration Works
+
+This project uses [raspi-captive-portal](https://github.com/Splines/raspi-captive-portal) for the complex AP management:
+
+1. Their setup handles hostapd, dnsmasq, dhcpcd configuration
+2. We add our Flask interface for WiFi/startup configuration
+3. Our monitor controls when to start/stop the AP
+4. All the hard networking stuff is handled by their proven code
 
 ## License
 
-MIT License
+MIT
