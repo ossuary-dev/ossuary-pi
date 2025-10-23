@@ -87,20 +87,22 @@
             const apBtn = document.getElementById('ap-mode-btn');
             if (data.ap_mode) {
                 if (data.manual_ap) {
-                    apStatus.textContent = 'Active (Manual - Safe Mode)';
+                    apStatus.textContent = 'Active (Manual Test Mode)';
                     apStatus.className = 'status-value connected';
-                    apBtn.textContent = 'Stop AP Mode';
+                    apBtn.textContent = 'Stop Test Mode';
                     apBtn.style.background = '#dc3545';
+                    apBtn.disabled = false;
                 } else {
                     apStatus.textContent = 'Active (Auto-failover)';
                     apStatus.className = 'status-value connected';
-                    apBtn.textContent = 'AP Mode Active';
-                    apBtn.disabled = true;
+                    apBtn.textContent = 'TEST AP Mode';
+                    apBtn.style.background = '#ffc107';
+                    apBtn.disabled = false;  // ENABLE IT FOR TESTING
                 }
             } else {
                 apStatus.textContent = 'Inactive';
                 apStatus.className = 'status-value';
-                apBtn.textContent = 'Test AP Mode';
+                apBtn.textContent = 'TEST AP Mode';
                 apBtn.style.background = '#17a2b8';
                 apBtn.disabled = false;
             }

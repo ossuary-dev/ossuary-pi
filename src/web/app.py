@@ -365,14 +365,15 @@ WantedBy=multi-user.target
 def toggle_ap_mode():
     """Toggle AP mode manually - temporary and safe"""
     try:
-        # Check current AP status
+        # Check current AP status and manual flag
         ap_result = subprocess.run(['systemctl', 'is-active', 'hostapd'],
                                  capture_output=True, text=True)
         ap_active = ap_result.stdout.strip() == 'active'
+        manual_flag_exists = Path('/tmp/ossuary_manual_ap').exists()
 
-        if ap_active:
-            # Stop AP mode and restore WiFi
-            logger.info("Manually stopping AP mode and restoring WiFi")
+        if ap_active and manual_flag_exists:
+            # Currently in manual test mode - stop it
+            logger.info("Stopping manual test AP mode and restoring WiFi")
 
             # Stop AP services
             subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
@@ -385,35 +386,38 @@ def toggle_ap_mode():
             subprocess.run(['systemctl', 'restart', 'wpa_supplicant'], check=False)
             subprocess.run(['wpa_cli', 'reconfigure'], check=False)
 
-            message = "AP mode stopped. Reconnecting to saved WiFi network..."
+            message = "Test mode stopped. Reconnecting to saved WiFi network..."
             new_state = False
+
         else:
-            # Start AP mode temporarily
-            logger.info("Manually starting temporary AP mode")
+            # Not in manual test mode - start test AP mode
+            logger.info("Starting TEST AP mode (disconnecting from WiFi temporarily)")
 
-            # Important: Do NOT modify wpa_supplicant.conf or network configs
-            # Just temporarily stop WiFi client and start AP
+            # Stop any existing AP first (in case of auto-failover)
+            if ap_active:
+                subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
+                subprocess.run(['systemctl', 'stop', 'dnsmasq'], check=False)
 
-            # Stop WiFi client (but keep config intact)
+            # Stop WiFi client to disconnect from network
             subprocess.run(['systemctl', 'stop', 'wpa_supplicant'], check=False)
 
-            # Start AP services
+            # Start AP services for testing
             subprocess.run(['systemctl', 'start', 'hostapd'], check=False)
             subprocess.run(['systemctl', 'start', 'dnsmasq'], check=False)
 
-            # Create a temporary flag file with timestamp
+            # Create manual test flag
             manual_flag = '/tmp/ossuary_manual_ap'
             with open(manual_flag, 'w') as f:
                 import time
                 f.write(str(time.time()))
 
-            # Set up auto-restore after 30 minutes (safety measure)
+            # Set up auto-restore after 30 minutes (safety)
             subprocess.run([
                 'bash', '-c',
-                'sleep 1800 && systemctl stop hostapd && systemctl stop dnsmasq && systemctl restart wpa_supplicant &'
+                'sleep 1800 && rm -f /tmp/ossuary_manual_ap && systemctl stop hostapd && systemctl stop dnsmasq && systemctl restart wpa_supplicant &'
             ], check=False)
 
-            message = "AP mode started temporarily (auto-restore in 30 min). Connect to 'Ossuary-Setup'. Reboot will restore WiFi."
+            message = "TEST AP mode started! WiFi disconnected. Connect to 'Ossuary-Setup'. Auto-restore in 30 min or reboot."
             new_state = True
 
         return jsonify({
