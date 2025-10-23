@@ -1,224 +1,108 @@
 #!/bin/bash
-# Ossuary Pi Uninstaller Script
 
 set -e
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+echo "==========================================="
+echo "    Ossuary Uninstallation Script"
+echo "==========================================="
 
-# Installation paths
-OSSUARY_USER="ossuary"
-INSTALL_DIR="/opt/ossuary"
-CONFIG_DIR="/etc/ossuary"
-DATA_DIR="/var/lib/ossuary"
-LOG_DIR="/var/log/ossuary"
-BIN_DIR="/usr/local/bin"
+# Check if running as root
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root (use sudo)"
+   exit 1
+fi
 
-# Services to remove
-SERVICES=("ossuary-config" "ossuary-netd" "ossuary-api" "ossuary-portal" "ossuary-kiosk")
+echo ""
+echo "This will completely remove Ossuary from your system."
+read -p "Are you sure you want to continue? (y/N): " -n 1 -r
+echo ""
 
-print_banner() {
-    echo -e "${RED}"
-    echo "  ╔═══════════════════════════════════════╗"
-    echo "  ║           Ossuary Pi                  ║"
-    echo "  ║          Uninstaller                  ║"
-    echo "  ╚═══════════════════════════════════════╝"
-    echo -e "${NC}"
-}
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Uninstallation cancelled."
+    exit 0
+fi
 
-check_root() {
-    if [[ $EUID -ne 0 ]]; then
-        echo -e "${RED}[ERROR]${NC} This script must be run as root"
-        echo "Please run: sudo $0"
-        exit 1
-    fi
-}
+echo ""
+echo "Stopping services..."
 
-confirm_removal() {
-    echo -e "${YELLOW}WARNING: This will completely remove Ossuary Pi from your system.${NC}"
-    echo ""
-    echo "The following will be removed:"
-    echo "  • All Ossuary Pi services and files"
-    echo "  • User account: $OSSUARY_USER"
-    echo "  • Configuration files in $CONFIG_DIR"
-    echo "  • Data files in $DATA_DIR"
-    echo "  • Log files in $LOG_DIR"
-    echo ""
-    echo -e "${RED}This action cannot be undone!${NC}"
-    echo ""
+# Stop services
+systemctl stop ossuary-wifi-monitor.service 2>/dev/null || true
+systemctl stop ossuary-captive-portal.service 2>/dev/null || true
+systemctl stop ossuary-startup.service 2>/dev/null || true
 
-    read -p "Are you sure you want to continue? (type 'yes' to confirm): " -r
-    if [[ $REPLY != "yes" ]]; then
-        echo "Uninstallation cancelled."
-        exit 0
-    fi
-}
+echo "Disabling services..."
 
-stop_services() {
-    echo -e "${BLUE}[INFO]${NC} Stopping Ossuary services..."
+# Disable services
+systemctl disable ossuary-wifi-monitor.service 2>/dev/null || true
+systemctl disable ossuary-captive-portal.service 2>/dev/null || true
+systemctl disable ossuary-startup.service 2>/dev/null || true
 
-    for service in "${SERVICES[@]}"; do
-        if systemctl is-active --quiet "$service" 2>/dev/null; then
-            echo "Stopping $service..."
-            systemctl stop "$service" || true
-        fi
-    done
+echo "Removing service files..."
 
-    echo -e "${GREEN}[SUCCESS]${NC} Services stopped"
-}
+# Remove service files
+rm -f /etc/systemd/system/ossuary-wifi-monitor.service
+rm -f /etc/systemd/system/ossuary-captive-portal.service
+rm -f /etc/systemd/system/ossuary-startup.service
 
-disable_services() {
-    echo -e "${BLUE}[INFO]${NC} Disabling and removing services..."
+# Reload systemd
+systemctl daemon-reload
 
-    for service in "${SERVICES[@]}"; do
-        if systemctl is-enabled --quiet "$service" 2>/dev/null; then
-            echo "Disabling $service..."
-            systemctl disable "$service" || true
-        fi
+echo "Removing installation directories..."
 
-        # Remove service file
-        if [[ -f "/etc/systemd/system/${service}.service" ]]; then
-            rm -f "/etc/systemd/system/${service}.service"
-            echo "Removed ${service}.service"
-        fi
-    done
+# Remove installation directories
+rm -rf /opt/ossuary
+rm -rf /etc/ossuary
 
-    # Reload systemd
-    systemctl daemon-reload
+echo "Restoring network configuration..."
 
-    echo -e "${GREEN}[SUCCESS]${NC} Services removed"
-}
+# Restore dhcpcd configuration
+if [ -f /etc/dhcpcd.conf.ossuary-backup ]; then
+    mv /etc/dhcpcd.conf.ossuary-backup /etc/dhcpcd.conf
+else
+    # Remove our static IP configuration
+    sed -i '/^interface wlan0$/,/^$/d' /etc/dhcpcd.conf 2>/dev/null || true
+fi
 
-remove_user() {
-    echo -e "${BLUE}[INFO]${NC} Removing user account..."
+# Restore dnsmasq configuration
+if [ -f /etc/dnsmasq.conf.ossuary-backup ]; then
+    mv /etc/dnsmasq.conf.ossuary-backup /etc/dnsmasq.conf
+else
+    # Remove our dnsmasq configuration
+    > /etc/dnsmasq.conf
+fi
 
-    if id "$OSSUARY_USER" &>/dev/null; then
-        # Kill any running processes
-        pkill -u "$OSSUARY_USER" || true
-        sleep 2
+# Restore hostapd configuration
+if [ -f /etc/hostapd/hostapd.conf.ossuary-backup ]; then
+    mv /etc/hostapd/hostapd.conf.ossuary-backup /etc/hostapd/hostapd.conf
+else
+    rm -f /etc/hostapd/hostapd.conf
+fi
 
-        # Remove user and home directory
-        userdel -r "$OSSUARY_USER" 2>/dev/null || true
+echo "Removing iptables rules..."
 
-        # Remove sudo configuration
-        rm -f "/etc/sudoers.d/ossuary"
+# Remove iptables rules
+iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
+iptables -D FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+iptables -D FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
 
-        # Remove polkit configuration
-        rm -f "/etc/polkit-1/localauthority/50-local.d/ossuary-networkmanager.pkla"
+# Save cleaned iptables
+iptables-save > /etc/iptables.ipv4.nat
 
-        echo -e "${GREEN}[SUCCESS]${NC} User $OSSUARY_USER removed"
-    else
-        echo -e "${YELLOW}[WARNING]${NC} User $OSSUARY_USER not found"
-    fi
-}
+# Remove IP forwarding if it was added by us
+sed -i '/^net.ipv4.ip_forward=1$/d' /etc/sysctl.conf 2>/dev/null || true
 
-remove_files() {
-    echo -e "${BLUE}[INFO]${NC} Removing installation files..."
+echo "Restarting network services..."
 
-    # Remove directories
-    local dirs=("$INSTALL_DIR" "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR")
+# Restart network services
+systemctl restart dhcpcd 2>/dev/null || true
+systemctl restart networking 2>/dev/null || true
 
-    for dir in "${dirs[@]}"; do
-        if [[ -d "$dir" ]]; then
-            rm -rf "$dir"
-            echo "Removed directory: $dir"
-        fi
-    done
-
-    # Remove binaries
-    if [[ -f "$BIN_DIR/ossuaryctl" ]]; then
-        rm -f "$BIN_DIR/ossuaryctl"
-        echo "Removed: $BIN_DIR/ossuaryctl"
-    fi
-
-    echo -e "${GREEN}[SUCCESS]${NC} Installation files removed"
-}
-
-remove_cron_jobs() {
-    echo -e "${BLUE}[INFO]${NC} Removing cron jobs..."
-
-    # Remove monitoring cron job
-    crontab -l 2>/dev/null | grep -v "ossuary" | crontab - || true
-
-    echo -e "${GREEN}[SUCCESS]${NC} Cron jobs removed"
-}
-
-revert_system_changes() {
-    echo -e "${BLUE}[INFO]${NC} Reverting system configuration changes..."
-
-    # Revert autologin
-    if [[ -d "/etc/systemd/system/getty@tty1.service.d" ]]; then
-        rm -rf "/etc/systemd/system/getty@tty1.service.d"
-        echo "Removed autologin configuration"
-    fi
-
-    # Note: We don't revert NetworkManager changes as they might be needed
-    # for the system to continue functioning properly
-
-    echo -e "${GREEN}[SUCCESS]${NC} System configuration reverted"
-}
-
-cleanup_packages() {
-    echo -e "${BLUE}[INFO]${NC} Cleaning up packages..."
-
-    # Note: We don't remove packages that might be used by other software
-    # Users can manually remove packages if needed
-
-    # Clean package cache
-    apt-get autoremove -y 2>/dev/null || true
-    apt-get autoclean 2>/dev/null || true
-
-    echo -e "${GREEN}[SUCCESS]${NC} Package cleanup completed"
-}
-
-print_completion() {
-    echo ""
-    echo -e "${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                                                           ║${NC}"
-    echo -e "${GREEN}║             Ossuary Pi Uninstallation Complete           ║${NC}"
-    echo -e "${GREEN}║                                                           ║${NC}"
-    echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo -e "${CYAN}Uninstallation Summary:${NC}"
-    echo "  • All Ossuary Pi services removed"
-    echo "  • User account '$OSSUARY_USER' deleted"
-    echo "  • Configuration and data files removed"
-    echo "  • System configuration reverted"
-    echo ""
-    echo -e "${YELLOW}Notes:${NC}"
-    echo "  • Some system packages were left installed (they may be used by other software)"
-    echo "  • NetworkManager configuration was left intact to maintain network connectivity"
-    echo "  • You may want to reboot the system to complete the cleanup"
-    echo ""
-    echo -e "${GREEN}Ossuary Pi has been successfully removed from your system.${NC}"
-    echo ""
-}
-
-main() {
-    print_banner
-    check_root
-    confirm_removal
-
-    echo ""
-    echo -e "${BLUE}[INFO]${NC} Starting Ossuary Pi uninstallation..."
-
-    stop_services
-    disable_services
-    remove_user
-    remove_files
-    remove_cron_jobs
-    revert_system_changes
-    cleanup_packages
-
-    print_completion
-}
-
-# Error handling
-trap 'echo -e "\n${RED}[ERROR]${NC} Uninstallation failed at line $LINENO"; exit 1' ERR
-
-# Run main uninstallation
-main "$@"
+echo ""
+echo "==========================================="
+echo "    Uninstallation Complete"
+echo "==========================================="
+echo ""
+echo "Ossuary has been removed from your system."
+echo "Your network configuration has been restored."
+echo ""
+echo "You may want to reboot to ensure all changes take effect."

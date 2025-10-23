@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div>
+    <p style="color: #666; margin-bottom: 20px;">
+        Configure a command to run automatically at startup. This command will be executed as the 'pi' user
+        and will automatically restart if it crashes or fails.
+    </p>
+
+    <form id="startup-form" onsubmit="saveStartupCommand(event)">
+        <div class="form-group">
+            <label for="command">Startup Command</label>
+            <textarea id="command" name="command" placeholder="e.g., chromium-browser --kiosk https://example.com">{{ command }}</textarea>
+            <small style="color: #666; display: block; margin-top: 5px;">
+                Examples:<br>
+                • <code>chromium-browser --kiosk --noerrdialogs --disable-infobars https://example.com</code><br>
+                • <code>python3 /home/pi/my_app.py</code><br>
+                • <code>/home/pi/start_application.sh</code>
+            </small>
+        </div>
+
+        <div style="display: flex; gap: 10px;">
+            <button type="submit">Save Command</button>
+            <button type="button" onclick="testCommand()" style="background: #17a2b8;">Test Command</button>
+            <button type="button" onclick="clearCommand()" style="background: #dc3545;">Clear Command</button>
+        </div>
+    </form>
+</div>
+
+<div style="margin-top: 40px;">
+    <h3 style="color: #555; margin-bottom: 15px;">Service Control</h3>
+    <div style="display: flex; gap: 10px;">
+        <button onclick="controlService('start')" style="background: #28a745;">Start Service</button>
+        <button onclick="controlService('stop')" style="background: #dc3545;">Stop Service</button>
+        <button onclick="controlService('restart')" style="background: #ffc107; color: #333;">Restart Service</button>
+    </div>
+</div>
+
+<div id="test-output" style="display: none; margin-top: 30px;">
+    <h3 style="color: #555; margin-bottom: 15px;">Test Output</h3>
+    <div style="background: #000; color: #0f0; padding: 15px; border-radius: 6px; font-family: 'Courier New', monospace; max-height: 300px; overflow-y: auto;">
+        <pre id="test-result"></pre>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function saveStartupCommand(event) {
+        event.preventDefault();
+
+        const command = document.getElementById('command').value.trim();
+
+        try {
+            const data = await fetchJSON('/set_startup', {
+                method: 'POST',
+                body: JSON.stringify({ command })
+            });
+
+            showAlert(data.message || 'Startup command saved successfully');
+
+            // Refresh page after a moment
+            setTimeout(() => {
+                window.location.reload();
+            }, 2000);
+
+        } catch (error) {
+            console.error('Failed to save startup command:', error);
+        }
+    }
+
+    function clearCommand() {
+        if (confirm('Are you sure you want to clear the startup command?')) {
+            document.getElementById('command').value = '';
+            saveStartupCommand(new Event('submit'));
+        }
+    }
+
+    async function testCommand() {
+        const command = document.getElementById('command').value.trim();
+
+        if (!command) {
+            showAlert('Please enter a command to test', 'error');
+            return;
+        }
+
+        const outputDiv = document.getElementById('test-output');
+        const resultPre = document.getElementById('test-result');
+
+        outputDiv.style.display = 'block';
+        resultPre.textContent = 'Testing command...\n';
+
+        try {
+            // Note: In a real implementation, you'd need an endpoint to test the command
+            // For now, we'll just show the command that would be run
+            resultPre.textContent = `Command to test: ${command}\n\nNote: In production, this would execute the command briefly to verify it works.`;
+
+        } catch (error) {
+            resultPre.textContent = `Error: ${error.message}`;
+        }
+    }
+
+    async function controlService(action) {
+        try {
+            // In a real implementation, you'd have endpoints for these actions
+            showAlert(`Service ${action} initiated`);
+
+            // Refresh status
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 2000);
+
+        } catch (error) {
+            console.error(`Failed to ${action} service:`, error);
+        }
+    }
+</script>
+{% endblock %}

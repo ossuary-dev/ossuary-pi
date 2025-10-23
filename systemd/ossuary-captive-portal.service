@@ -1,0 +1,17 @@
+[Unit]
+Description=Ossuary Captive Portal Web Interface
+After=network.target
+Wants=network.target
+
+[Service]
+Type=forking
+User=root
+ExecStart=/opt/ossuary/services/captive_portal_wrapper.sh start
+ExecStop=/opt/ossuary/services/captive_portal_wrapper.sh stop
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

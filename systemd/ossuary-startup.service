@@ -1,0 +1,19 @@
+[Unit]
+Description=Ossuary User Startup Command
+After=multi-user.target graphical.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Environment="DISPLAY=:0"
+Environment="HOME=/home/pi"
+# ExecStart will be dynamically configured by the web interface
+ExecStart=/bin/echo "No startup command configured"
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

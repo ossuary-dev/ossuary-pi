@@ -1,1 +1,0 @@
-"""Display management module."""

@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="margin-bottom: 30px;">
+    <button onclick="scanNetworks()" id="scan-button">Scan for Networks</button>
+</div>
+
+<div id="networks-container">
+    <h3 style="color: #555; margin-bottom: 15px;">Available Networks</h3>
+    <div id="networks-list">
+        {% for network in networks %}
+        <div class="network-item" style="background: #f8f9fa; padding: 15px; margin-bottom: 10px; border-radius: 6px; cursor: pointer;" onclick="selectNetwork('{{ network.ssid }}')">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <strong>{{ network.ssid }}</strong>
+                    {% if network.encrypted %}
+                    <span style="color: #666; margin-left: 10px;">🔒</span>
+                    {% endif %}
+                </div>
+                <div style="color: #666;">
+                    Signal: {{ network.signal }}%
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<div id="connect-modal" style="display: none; margin-top: 30px; background: #f8f9fa; padding: 20px; border-radius: 8px;">
+    <h3 style="color: #555; margin-bottom: 15px;">Connect to Network</h3>
+    <form id="connect-form" onsubmit="connectToNetwork(event)">
+        <div class="form-group">
+            <label for="ssid">Network Name (SSID)</label>
+            <input type="text" id="ssid" name="ssid" readonly>
+        </div>
+        <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="Enter WiFi password">
+        </div>
+        <div style="display: flex; gap: 10px;">
+            <button type="submit">Connect</button>
+            <button type="button" onclick="cancelConnect()" style="background: #6c757d;">Cancel</button>
+        </div>
+    </form>
+</div>
+
+{% if saved_networks %}
+<div style="margin-top: 40px;">
+    <h3 style="color: #555; margin-bottom: 15px;">Saved Networks</h3>
+    {% for network in saved_networks %}
+    <div style="background: #e8f4fd; padding: 10px; margin-bottom: 5px; border-radius: 4px;">
+        {{ network.ssid }}
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let scanning = false;
+
+    async function scanNetworks() {
+        if (scanning) return;
+
+        const button = document.getElementById('scan-button');
+        const originalText = button.textContent;
+        button.innerHTML = 'Scanning<span class="spinner"></span>';
+        button.disabled = true;
+        scanning = true;
+
+        try {
+            const networks = await fetchJSON('/scan_wifi');
+
+            const networksList = document.getElementById('networks-list');
+            networksList.innerHTML = '';
+
+            networks.forEach(network => {
+                const div = document.createElement('div');
+                div.className = 'network-item';
+                div.style = 'background: #f8f9fa; padding: 15px; margin-bottom: 10px; border-radius: 6px; cursor: pointer;';
+                div.onclick = () => selectNetwork(network.ssid);
+
+                div.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong>${network.ssid}</strong>
+                            ${network.encrypted ? '<span style="color: #666; margin-left: 10px;">🔒</span>' : ''}
+                        </div>
+                        <div style="color: #666;">
+                            Signal: ${network.signal || 0}%
+                        </div>
+                    </div>
+                `;
+
+                networksList.appendChild(div);
+            });
+
+            if (networks.length === 0) {
+                networksList.innerHTML = '<p style="color: #666;">No networks found</p>';
+            }
+
+        } catch (error) {
+            console.error('Failed to scan networks:', error);
+        } finally {
+            button.textContent = originalText;
+            button.disabled = false;
+            scanning = false;
+        }
+    }
+
+    function selectNetwork(ssid) {
+        document.getElementById('ssid').value = ssid;
+        document.getElementById('password').value = '';
+        document.getElementById('connect-modal').style.display = 'block';
+        document.getElementById('password').focus();
+    }
+
+    function cancelConnect() {
+        document.getElementById('connect-modal').style.display = 'none';
+        document.getElementById('ssid').value = '';
+        document.getElementById('password').value = '';
+    }
+
+    async function connectToNetwork(event) {
+        event.preventDefault();
+
+        const ssid = document.getElementById('ssid').value;
+        const password = document.getElementById('password').value;
+
+        if (!ssid) {
+            showAlert('Please select a network', 'error');
+            return;
+        }
+
+        try {
+            const data = await fetchJSON('/connect_wifi', {
+                method: 'POST',
+                body: JSON.stringify({ ssid, password })
+            });
+
+            showAlert(data.message || 'Connected successfully');
+            cancelConnect();
+
+            // Refresh status after a few seconds
+            setTimeout(() => {
+                window.location.href = '/';
+            }, 3000);
+
+        } catch (error) {
+            console.error('Failed to connect:', error);
+        }
+    }
+
+    // Scan on page load
+    scanNetworks();
+</script>
+{% endblock %}

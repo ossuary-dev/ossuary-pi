@@ -1,1 +1,0 @@
-"""Ossuary Pi Source Package."""
