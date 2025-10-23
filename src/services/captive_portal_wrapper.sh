@@ -31,10 +31,19 @@ setup_ap() {
     # Start dnsmasq
     systemctl restart dnsmasq
 
-    # Enable NAT
+    # Enable NAT and routing
     iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
     iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
     iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
+
+    # Allow access to the web interface
+    iptables -A INPUT -i wlan0 -p tcp --dport 8080 -j ACCEPT
+    iptables -A INPUT -i wlan0 -p tcp --dport 80 -j ACCEPT
+    iptables -A INPUT -i wlan0 -p udp --dport 53 -j ACCEPT
+    iptables -A INPUT -i wlan0 -p udp --dport 67 -j ACCEPT
+
+    # Redirect HTTP traffic to our portal (captive portal behavior)
+    iptables -t nat -A PREROUTING -i wlan0 -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:8080
 
     echo "Access point started successfully"
 }
@@ -53,6 +62,13 @@ teardown_ap() {
 
     # Stop dnsmasq
     systemctl stop dnsmasq
+
+    # Remove firewall rules
+    iptables -t nat -D PREROUTING -i wlan0 -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:8080 2>/dev/null || true
+    iptables -D INPUT -i wlan0 -p tcp --dport 8080 -j ACCEPT 2>/dev/null || true
+    iptables -D INPUT -i wlan0 -p tcp --dport 80 -j ACCEPT 2>/dev/null || true
+    iptables -D INPUT -i wlan0 -p udp --dport 53 -j ACCEPT 2>/dev/null || true
+    iptables -D INPUT -i wlan0 -p udp --dport 67 -j ACCEPT 2>/dev/null || true
 
     # Remove NAT rules
     iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
