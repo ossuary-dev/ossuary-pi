@@ -86,13 +86,23 @@
             const apStatus = document.getElementById('ap-status');
             const apBtn = document.getElementById('ap-mode-btn');
             if (data.ap_mode) {
-                apStatus.textContent = data.manual_ap ? 'Active (Manual)' : 'Active (Auto)';
-                apStatus.className = 'status-value connected';
-                apBtn.textContent = 'Stop AP Mode';
+                if (data.manual_ap) {
+                    apStatus.textContent = 'Active (Manual - Safe Mode)';
+                    apStatus.className = 'status-value connected';
+                    apBtn.textContent = 'Stop AP Mode';
+                    apBtn.style.background = '#dc3545';
+                } else {
+                    apStatus.textContent = 'Active (Auto-failover)';
+                    apStatus.className = 'status-value connected';
+                    apBtn.textContent = 'AP Mode Active';
+                    apBtn.disabled = true;
+                }
             } else {
                 apStatus.textContent = 'Inactive';
                 apStatus.className = 'status-value';
-                apBtn.textContent = 'Start AP Mode';
+                apBtn.textContent = 'Test AP Mode';
+                apBtn.style.background = '#17a2b8';
+                apBtn.disabled = false;
             }
 
             // Update stop button visibility

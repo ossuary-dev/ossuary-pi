@@ -417,6 +417,16 @@ def main():
             logger.warning("Flask not running, restarting...")
             start_flask()
 
+        # Check for manual AP mode flag
+        manual_ap_flag = '/tmp/ossuary_manual_ap'
+        is_manual_ap = os.path.exists(manual_ap_flag)
+
+        # If in manual AP mode, don't interfere
+        if is_manual_ap:
+            logger.debug("Manual AP mode active, skipping automatic management")
+            time.sleep(CHECK_INTERVAL)
+            continue
+
         has_wifi = check_wifi()
         has_internet = check_internet() if has_wifi else False
 

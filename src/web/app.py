@@ -363,7 +363,7 @@ WantedBy=multi-user.target
 
 @app.route('/toggle_ap_mode', methods=['POST'])
 def toggle_ap_mode():
-    """Toggle AP mode manually"""
+    """Toggle AP mode manually - temporary and safe"""
     try:
         # Check current AP status
         ap_result = subprocess.run(['systemctl', 'is-active', 'hostapd'],
@@ -371,29 +371,50 @@ def toggle_ap_mode():
         ap_active = ap_result.stdout.strip() == 'active'
 
         if ap_active:
-            # Stop AP mode
-            logger.info("Manually stopping AP mode")
+            # Stop AP mode and restore WiFi
+            logger.info("Manually stopping AP mode and restoring WiFi")
+
+            # Stop AP services
             subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
             subprocess.run(['systemctl', 'stop', 'dnsmasq'], check=False)
-            # Restart wpa_supplicant to reconnect to WiFi
+
+            # Remove manual AP flag
+            Path('/tmp/ossuary_manual_ap').unlink(missing_ok=True)
+
+            # Restart wpa_supplicant to reconnect to saved WiFi
             subprocess.run(['systemctl', 'restart', 'wpa_supplicant'], check=False)
-            message = "AP mode stopped. Reconnecting to WiFi..."
+            subprocess.run(['wpa_cli', 'reconfigure'], check=False)
+
+            message = "AP mode stopped. Reconnecting to saved WiFi network..."
             new_state = False
         else:
-            # Start AP mode
-            logger.info("Manually starting AP mode")
+            # Start AP mode temporarily
+            logger.info("Manually starting temporary AP mode")
+
+            # Important: Do NOT modify wpa_supplicant.conf or network configs
+            # Just temporarily stop WiFi client and start AP
+
+            # Stop WiFi client (but keep config intact)
             subprocess.run(['systemctl', 'stop', 'wpa_supplicant'], check=False)
+
+            # Start AP services
             subprocess.run(['systemctl', 'start', 'hostapd'], check=False)
             subprocess.run(['systemctl', 'start', 'dnsmasq'], check=False)
-            message = "AP mode started. Connect to 'Ossuary-Setup'"
-            new_state = True
 
-        # Create a flag file to indicate manual AP mode
-        manual_flag = '/tmp/ossuary_manual_ap'
-        if new_state:
-            Path(manual_flag).touch()
-        else:
-            Path(manual_flag).unlink(missing_ok=True)
+            # Create a temporary flag file with timestamp
+            manual_flag = '/tmp/ossuary_manual_ap'
+            with open(manual_flag, 'w') as f:
+                import time
+                f.write(str(time.time()))
+
+            # Set up auto-restore after 30 minutes (safety measure)
+            subprocess.run([
+                'bash', '-c',
+                'sleep 1800 && systemctl stop hostapd && systemctl stop dnsmasq && systemctl restart wpa_supplicant &'
+            ], check=False)
+
+            message = "AP mode started temporarily (auto-restore in 30 min). Connect to 'Ossuary-Setup'. Reboot will restore WiFi."
+            new_state = True
 
         return jsonify({
             'success': True,
@@ -422,6 +443,73 @@ def stop_startup():
 
     except Exception as e:
         logger.error(f"Error stopping startup service: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/control_startup/<action>', methods=['POST'])
+def control_startup(action):
+    """Control the startup service (start/stop/restart)"""
+    if action not in ['start', 'stop', 'restart']:
+        return jsonify({'success': False, 'error': 'Invalid action'}), 400
+
+    try:
+        # Check if service file exists
+        service_file = '/etc/systemd/system/ossuary-startup.service'
+        if not os.path.exists(service_file):
+            # Check if there's a command configured
+            config = load_config()
+            command = config.get('startup_command', '')
+            if not command:
+                return jsonify({'success': False, 'error': 'No startup command configured'}), 400
+
+            # Create the service
+            if not update_startup_service(command):
+                return jsonify({'success': False, 'error': 'Failed to create service'}), 500
+
+        # Execute the action
+        result = subprocess.run(['systemctl', action, 'ossuary-startup.service'],
+                              capture_output=True, text=True, timeout=15)
+
+        if result.returncode == 0:
+            # For start/restart, verify the service actually started
+            if action in ['start', 'restart']:
+                import time
+                time.sleep(2)  # Give service time to start
+
+                # Check if it's actually running
+                check = subprocess.run(['systemctl', 'is-active', 'ossuary-startup.service'],
+                                     capture_output=True, text=True)
+
+                if check.stdout.strip() == 'active':
+                    logger.info(f"Startup service {action} successful")
+                    return jsonify({'success': True, 'message': f'Service {action}ed successfully'})
+                else:
+                    # Get failure reason
+                    status = subprocess.run(['systemctl', 'status', 'ossuary-startup.service', '--no-pager', '-n', '10'],
+                                          capture_output=True, text=True)
+                    logger.error(f"Service failed to start: {status.stdout}")
+
+                    # Extract error message
+                    error_msg = "Service failed to start. Check logs for details."
+                    if "code=exited, status=" in status.stdout:
+                        error_msg = "Command exited with error. Check the command syntax."
+                    elif "Main process exited" in status.stdout:
+                        error_msg = "Command crashed immediately after starting."
+
+                    return jsonify({'success': False, 'error': error_msg, 'details': status.stdout}), 500
+            else:
+                # Stop action
+                logger.info(f"Startup service {action} successful")
+                return jsonify({'success': True, 'message': f'Service {action}ped successfully'})
+        else:
+            logger.error(f"Failed to {action} startup service: {result.stderr}")
+            return jsonify({'success': False, 'error': f'Failed to {action} service: {result.stderr}'}), 500
+
+    except subprocess.TimeoutExpired:
+        logger.error(f"Timeout while trying to {action} service")
+        return jsonify({'success': False, 'error': 'Operation timed out'}), 500
+    except Exception as e:
+        logger.error(f"Error controlling startup service: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
