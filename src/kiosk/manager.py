@@ -27,7 +27,7 @@ class KioskManager:
         self.is_initialized = False
         self.is_running = False
         self.current_url = config.get("url", "")
-        self.default_url = config.get("default_url", "http://ossuary.local")
+        self.default_url = config.get("default_url", "http://localhost")
 
         # Callbacks
         self.url_change_callbacks: List[Callable] = []

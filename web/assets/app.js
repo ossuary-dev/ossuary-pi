@@ -15,7 +15,8 @@ class OssuaryPortal {
         await this.loadSystemStatus();
         await this.loadNetworkStatus();
         await this.updateAPModeStatus();
-        this.setupWebSocket();
+        // WebSocket disabled - no backend implementation
+        // this.setupWebSocket();
         this.setupEventListeners();
         this.startStatusPolling();
     }
@@ -36,34 +37,35 @@ class OssuaryPortal {
         setInterval(() => this.updateAPModeStatus(), 10000);
     }
 
-    setupWebSocket() {
-        try {
-            this.ws = new WebSocket(this.wsUrl);
-
-            this.ws.onopen = () => {
-                console.log('WebSocket connected');
-                this.updateStatus('connected', 'Connected');
-            };
-
-            this.ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                this.handleWebSocketMessage(data);
-            };
-
-            this.ws.onclose = () => {
-                console.log('WebSocket disconnected');
-                this.updateStatus('disconnected', 'Disconnected');
-                // Reconnect after 5 seconds
-                setTimeout(() => this.setupWebSocket(), 5000);
-            };
-
-            this.ws.onerror = (error) => {
-                console.error('WebSocket error:', error);
-            };
-        } catch (error) {
-            console.error('Failed to setup WebSocket:', error);
-        }
-    }
+    // WebSocket disabled - no backend implementation
+    // setupWebSocket() {
+    //     try {
+    //         this.ws = new WebSocket(this.wsUrl);
+    //
+    //         this.ws.onopen = () => {
+    //             console.log('WebSocket connected');
+    //             this.updateStatus('connected', 'Connected');
+    //         };
+    //
+    //         this.ws.onmessage = (event) => {
+    //             const data = JSON.parse(event.data);
+    //             this.handleWebSocketMessage(data);
+    //         };
+    //
+    //         this.ws.onclose = () => {
+    //             console.log('WebSocket disconnected');
+    //             this.updateStatus('disconnected', 'Disconnected');
+    //             // Reconnect after 5 seconds
+    //             setTimeout(() => this.setupWebSocket(), 5000);
+    //         };
+    //
+    //         this.ws.onerror = (error) => {
+    //             console.error('WebSocket error:', error);
+    //         };
+    //     } catch (error) {
+    //         console.error('Failed to setup WebSocket:', error);
+    //     }
+    // }
 
     handleWebSocketMessage(data) {
         switch (data.type) {
@@ -189,11 +191,22 @@ class OssuaryPortal {
             const securityText = network.security ? 'Secured' : 'Open';
             const connectedClass = network.connected ? 'connected' : '';
 
+            // Properly escape for HTML content
+            const htmlEscaped = network.ssid
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+
+            // Base64 encode SSID for safe data attribute storage
+            const encodedSSID = btoa(encodeURIComponent(network.ssid));
+
             return `
-                <div class="wifi-network ${connectedClass}" onclick="selectNetwork('${network.ssid}', ${network.security})">
+                <div class="wifi-network ${connectedClass}" data-ssid="${encodedSSID}" data-security="${network.security}">
                     <div class="wifi-info">
                         <div>
-                            <div class="wifi-name">${network.ssid}</div>
+                            <div class="wifi-name">${htmlEscaped}</div>
                             <div class="wifi-security">${securityText}</div>
                         </div>
                     </div>
@@ -206,6 +219,16 @@ class OssuaryPortal {
         }).join('');
 
         container.innerHTML = networksHtml;
+
+        // Add click handlers after creating HTML to avoid XSS
+        document.querySelectorAll('.wifi-network').forEach(item => {
+            item.addEventListener('click', function() {
+                // Decode the base64 encoded SSID
+                const ssid = decodeURIComponent(atob(this.dataset.ssid));
+                const requiresPassword = this.dataset.security === 'true';
+                window.portal.selectNetwork(ssid, requiresPassword);
+            });
+        });
     }
 
     renderSystemInfo(info) {

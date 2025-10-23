@@ -85,7 +85,11 @@ class NetworkService:
             try:
                 # Get current status
                 status = await self.network_manager.get_status()
-                current_time = asyncio.get_event_loop().time()
+                # Python 3.10+ compatible - use get_running_loop()
+                try:
+                    current_time = asyncio.get_running_loop().time()
+                except RuntimeError:
+                    current_time = asyncio.get_event_loop().time()
 
                 # Active reconnection logic (CRITICAL IMPROVEMENT)
                 if (status.state == NetworkState.DISCONNECTED and

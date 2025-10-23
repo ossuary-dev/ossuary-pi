@@ -47,7 +47,7 @@ class NetworkConfig(BaseModel):
 class KioskConfig(BaseModel):
     """Kiosk browser configuration."""
     url: str = Field(default="")
-    default_url: str = Field(default="http://ossuary.local")
+    default_url: str = Field(default="http://localhost")
     refresh_interval: int = Field(default=0, ge=0)
     enable_webgl: bool = Field(default=True)
     enable_webgpu: bool = Field(default=False)

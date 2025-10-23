@@ -390,11 +390,18 @@ class NetworkManager:
         try:
             self.logger.info("Scanning for WiFi networks")
 
-            # Request scan
-            self.wifi_device.request_scan_async(None, self._scan_callback, None)
-
-            # Wait for scan to complete (with timeout)
-            await asyncio.sleep(5)  # Give scan time to complete
+            # Request scan synchronously (more reliable on Pi)
+            try:
+                # Try synchronous scan first (more compatible with Pi's NetworkManager)
+                self.wifi_device.request_scan(None)
+                # Wait for scan to complete
+                await asyncio.sleep(3)
+            except Exception as e:
+                self.logger.warning(f"Synchronous scan failed, trying async: {e}")
+                # Fallback to async scan
+                self.wifi_device.request_scan_async(None, self._scan_callback, None)
+                # Wait for scan to complete (with timeout)
+                await asyncio.sleep(5)  # Give scan time to complete
 
             # Get access points
             access_points = self.wifi_device.get_access_points()

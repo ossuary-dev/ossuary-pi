@@ -50,26 +50,64 @@ class APIRouter:
             """Get current network status."""
             try:
                 status = await self.network_manager.get_status()
-                return status.to_dict()
+                if hasattr(status, 'to_dict'):
+                    status_dict = status.to_dict()
+                else:
+                    status_dict = status
+
+                # Ensure timestamp is present
+                if 'timestamp' not in status_dict:
+                    status_dict['timestamp'] = datetime.now()
+
+                return status_dict
             except Exception as e:
                 self.logger.error(f"Failed to get network status: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                # Return a default status on error
+                return NetworkStatus(
+                    state="unknown",
+                    ssid=None,
+                    ip_address=None,
+                    signal_strength=0,
+                    interface=None,
+                    ap_active=False,
+                    ap_ssid=None,
+                    ap_clients=0,
+                    last_error=str(e),
+                    timestamp=datetime.now()
+                )
 
         @self.router.post("/network/scan", response_model=NetworkScanResponse)
         async def scan_networks(request: NetworkScanRequest):
             """Scan for available WiFi networks."""
             try:
                 networks = await self.network_manager.scan_networks()
-                network_info = [NetworkInfo(**network.to_dict()) for network in networks]
+                network_info = []
+
+                for network in networks:
+                    try:
+                        # Handle NetworkInfo objects or dicts
+                        if hasattr(network, 'to_dict'):
+                            network_data = network.to_dict()
+                        else:
+                            network_data = network
+                        network_info.append(NetworkInfo(**network_data))
+                    except Exception as e:
+                        self.logger.warning(f"Skipping invalid network data: {e}")
+                        continue
 
                 return NetworkScanResponse(
                     networks=network_info,
                     scan_time=datetime.now(),
-                    total_found=len(networks)
+                    total_found=len(network_info)
                 )
             except Exception as e:
                 self.logger.error(f"Failed to scan networks: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                # Return empty list instead of error for better UI experience
+                return NetworkScanResponse(
+                    networks=[],
+                    scan_time=datetime.now(),
+                    total_found=0
+                )
 
         @self.router.post("/network/connect", response_model=APIResponse)
         async def connect_network(request: NetworkConnectRequest):

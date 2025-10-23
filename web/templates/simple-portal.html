@@ -138,9 +138,15 @@
         <div class="form-group">
             <label for="kioskUrl">Kiosk URL:</label>
             <input type="url" id="kioskUrl" placeholder="https://example.com" value="https://google.com">
+            <button onclick="saveKioskUrl()" style="margin-top: 10px;">💾 Save URL</button>
         </div>
 
-        <button onclick="connectToNetwork()" id="connectBtn">Connect</button>
+        <button onclick="connectToNetwork()" id="connectBtn">🔌 Connect to WiFi</button>
+
+        <div style="margin-top: 10px; display: flex; gap: 10px;">
+            <button onclick="enableAPMode()" id="apModeBtn" style="background: #28a745;">📶 Enable AP Mode</button>
+            <button onclick="restartSystem()" style="background: #dc3545;">🔄 Restart System</button>
+        </div>
 
         <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #eee; text-align: center; color: #666; font-size: 14px;">
             Once connected, this device will display your chosen URL
@@ -173,7 +179,7 @@
 
                 const data = await response.json();
 
-                if (data.success) {
+                if (data.networks) {
                     displayNetworks(data.networks);
                     hideStatus();
                 } else {
@@ -193,23 +199,88 @@
                 return;
             }
 
-            list.innerHTML = networks.map(network => `
-                <div class="network-item" onclick="selectNetwork('${network.ssid}')">
-                    <span>${network.ssid}</span>
-                    <span class="signal-strength">${network.signal_strength}% ${network.security ? '🔒' : '🔓'}</span>
-                </div>
-            `).join('');
+            list.innerHTML = networks.map(network => {
+                // Escape for HTML content
+                const htmlEscaped = network.ssid
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#39;');
+
+                // Base64 encode for data attribute to avoid any escaping issues
+                const dataSSID = btoa(encodeURIComponent(network.ssid));
+
+                return `
+                    <div class="network-item" data-ssid="${dataSSID}">
+                        <span>${htmlEscaped}</span>
+                        <span class="signal-strength">${network.signal_strength}% ${network.security ? '🔒' : '🔓'}</span>
+                    </div>
+                `;
+            }).join('');
+
+            // Add click handlers after creating the HTML
+            document.querySelectorAll('.network-item').forEach(item => {
+                item.addEventListener('click', function() {
+                    // Decode the base64 encoded SSID
+                    const ssid = decodeURIComponent(atob(this.dataset.ssid));
+                    selectNetwork(ssid);
+                });
+            });
         }
 
         function selectNetwork(ssid) {
             selectedNetwork = ssid;
 
-            // Update UI
+            // Update UI - compare with decoded SSID
+            const encodedSSID = btoa(encodeURIComponent(ssid));
             document.querySelectorAll('.network-item').forEach(item => {
-                item.classList.remove('selected');
+                if (item.dataset.ssid === encodedSSID) {
+                    item.classList.add('selected');
+                } else {
+                    item.classList.remove('selected');
+                }
             });
+        }
 
-            event.target.closest('.network-item').classList.add('selected');
+        async function saveKioskUrl() {
+            const kioskUrl = document.getElementById('kioskUrl').value;
+
+            if (!kioskUrl) {
+                showStatus('Please enter a URL', 'error');
+                return;
+            }
+
+            showStatus('Saving URL...', 'loading');
+
+            try {
+                const response = await fetch('/api/v1/kiosk/config', {
+                    method: 'PUT',  // Changed from POST to PUT
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: kioskUrl })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('URL saved successfully!', 'success');
+
+                    // Refresh kiosk if configured
+                    try {
+                        await fetch('/api/v1/kiosk/refresh', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' }
+                        });
+                    } catch (e) {
+                        console.log('Could not refresh kiosk');
+                    }
+                } else {
+                    showStatus('Failed to save URL', 'error');
+                }
+            } catch (error) {
+                showStatus('Error saving URL', 'error');
+                console.error('Save URL error:', error);
+            }
         }
 
         async function connectToNetwork() {
@@ -219,7 +290,6 @@
             }
 
             const password = document.getElementById('password').value;
-            const kioskUrl = document.getElementById('kioskUrl').value;
 
             showStatus('Connecting...', 'loading');
             document.getElementById('connectBtn').disabled = true;
@@ -238,25 +308,8 @@
                 const connectData = await connectResponse.json();
 
                 if (connectData.success) {
-                    // Update kiosk URL if provided
-                    if (kioskUrl) {
-                        try {
-                            await fetch('/api/v1/kiosk/config', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ url: kioskUrl })
-                            });
-                        } catch (error) {
-                            console.error('Failed to update kiosk URL:', error);
-                        }
-                    }
-
-                    showStatus('Connected! Redirecting to kiosk...', 'success');
-
-                    // Redirect after a short delay
-                    setTimeout(() => {
-                        window.location.href = kioskUrl || 'https://google.com';
-                    }, 2000);
+                    showStatus('Connected successfully!', 'success');
+                    document.getElementById('connectBtn').disabled = false;
                 } else {
                     showStatus(`Connection failed: ${connectData.message}`, 'error');
                     document.getElementById('connectBtn').disabled = false;
@@ -265,6 +318,51 @@
                 showStatus('Connection error', 'error');
                 document.getElementById('connectBtn').disabled = false;
                 console.error('Connect error:', error);
+            }
+        }
+
+        async function enableAPMode() {
+            showStatus('Enabling AP Mode...', 'loading');
+            document.getElementById('apModeBtn').disabled = true;
+
+            try {
+                const response = await fetch('/api/v1/network/ap-mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enable: true })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showStatus('AP Mode enabled! Connect to ossuary-setup WiFi network.', 'success');
+                } else {
+                    showStatus('Failed to enable AP Mode', 'error');
+                    document.getElementById('apModeBtn').disabled = false;
+                }
+            } catch (error) {
+                showStatus('Error enabling AP Mode', 'error');
+                document.getElementById('apModeBtn').disabled = false;
+                console.error('AP Mode error:', error);
+            }
+        }
+
+        async function restartSystem() {
+            if (!confirm('Are you sure you want to restart the system?')) {
+                return;
+            }
+
+            showStatus('Restarting system...', 'loading');
+
+            try {
+                await fetch('/api/v1/system/restart', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                showStatus('System restart initiated', 'success');
+            } catch (error) {
+                console.error('Restart error:', error);
             }
         }
 

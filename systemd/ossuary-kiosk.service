@@ -6,8 +6,8 @@ Requisite=ossuary-display.service
 
 [Service]
 Type=exec
-User=root
-Group=root
+User=ossuary
+Group=ossuary
 ExecStart=/opt/ossuary/venv/bin/python /opt/ossuary/bin/ossuary-kiosk
 Restart=always
 RestartSec=10
@@ -15,9 +15,12 @@ StandardOutput=journal
 StandardError=journal
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/ossuary/src
+Environment=DISPLAY=:0
+# XAUTHORITY will be auto-detected by the service
+Environment=HOME=/home/ossuary
 
 # Allow access to X display and audio
-SupplementaryGroups=audio video input ossuary
+SupplementaryGroups=audio video input
 
 [Install]
 WantedBy=multi-user.target

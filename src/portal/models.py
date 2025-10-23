@@ -20,7 +20,8 @@ class NetworkConnectRequest(BaseModel):
     @classmethod
     def validate_password(cls, v):
         """Validate password requirements."""
-        if v is not None and len(v) < 8:
+        # Allow empty passwords for open networks
+        if v is not None and v != "" and len(v) < 8:
             raise ValueError("Password must be at least 8 characters")
         return v
 

@@ -188,8 +188,8 @@ class KioskService:
             root.destroy()
             self.logger.info("Display access test successful")
         except Exception as e:
-            self.logger.error(f"Display access test failed: {e}")
-            self.logger.error("Kiosk may not be able to start - check X11 permissions")
+            self.logger.warning(f"Display access test failed: {e}")
+            self.logger.warning("Display not available - will run in headless mode if no X11 available")
 
     def _log_compatibility_check(self, compatibility: Dict[str, Any]) -> None:
         """Log system compatibility check results."""
@@ -244,7 +244,11 @@ class KioskService:
 
         while self.running:
             try:
-                current_time = asyncio.get_event_loop().time()
+                # Python 3.10+ compatible - use get_running_loop()
+                try:
+                    current_time = asyncio.get_running_loop().time()
+                except RuntimeError:
+                    current_time = asyncio.get_event_loop().time()
 
                 # Periodically check for configuration changes
                 if current_time - last_config_check > config_check_interval:

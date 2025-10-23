@@ -26,7 +26,7 @@ class BrowserController:
 
         # Configuration
         self.current_url = config.get("url", "")
-        self.default_url = config.get("default_url", "http://localhost/starter")
+        self.default_url = config.get("default_url", "http://localhost")
         self.enable_webgl = config.get("enable_webgl", True)
         self.enable_webgpu = config.get("enable_webgpu", False)
         self.disable_screensaver = config.get("disable_screensaver", True)
@@ -226,27 +226,25 @@ class BrowserController:
                 "--disable-gpu-rasterization",
             ])
 
-            # WebGL specific flags
-            if self.enable_webgl:
-                cmd.extend([
-                    "--enable-webgl",
-                    "--enable-webgl2-compute-context",
-                ])
-            else:
-                cmd.extend([
-                    "--disable-webgl",
-                ])
+        # WebGL specific flags (separate from GPU acceleration)
+        if self.enable_webgl:
+            cmd.extend([
+                "--enable-webgl",
+                "--enable-webgl2-compute-context",
+            ])
+        else:
+            cmd.extend([
+                "--disable-webgl",
+            ])
 
-            # WebGPU specific flags (experimental)
-            if self.enable_webgpu:
-                cmd.extend([
-                    "--enable-unsafe-webgpu",
-                    "--enable-features=WebGPU",
-                ])
-            else:
-                cmd.extend([
-                    "--disable-webgpu",
-                ])
+        # WebGPU specific flags (experimental)
+        if self.enable_webgpu:
+            if "--enable-unsafe-webgpu" not in cmd:  # Avoid duplicate if already added for Pi5
+                cmd.append("--enable-unsafe-webgpu")
+            if not any("WebGPU" in flag for flag in cmd):
+                cmd.append("--enable-features=WebGPU")
+        else:
+            cmd.append("--disable-webgpu")
 
         # Security flags - conditional based on environment (2025 security fix)
         cmd.extend(self._get_security_flags())
@@ -315,6 +313,23 @@ class BrowserController:
             if xauthority:
                 env["XAUTHORITY"] = xauthority
 
+            # Ensure we have the right permissions
+            env["HOME"] = os.path.expanduser("~")
+
+            # Ensure the chromium data directory exists and is writable
+            try:
+                self.user_data_dir.mkdir(parents=True, exist_ok=True)
+                # Test write permissions
+                test_file = self.user_data_dir / "test_write"
+                test_file.touch()
+                test_file.unlink()
+            except Exception as e:
+                self.logger.warning(f"Cannot write to user data dir {self.user_data_dir}: {e}")
+                # Use a temporary directory instead
+                import tempfile
+                self.user_data_dir = Path(tempfile.mkdtemp(prefix="ossuary_chromium_"))
+                self.logger.info(f"Using temporary user data dir: {self.user_data_dir}")
+
             # Disable screensaver if configured
             if self.disable_screensaver:
                 await self._disable_screensaver()
@@ -368,7 +383,7 @@ class BrowserController:
             self.logger.info(f"Browser started with PID: {self.pid}")
 
             # Wait a moment and check if process started successfully
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2)  # Give browser more time to start
             if self.process.poll() is not None:
                 # Process already exited
                 try:
@@ -378,7 +393,16 @@ class BrowserController:
                     if stdout:
                         self.logger.error(f"STDOUT: {stdout.decode('utf-8', errors='ignore')}")
                     if stderr:
-                        self.logger.error(f"STDERR: {stderr.decode('utf-8', errors='ignore')}")
+                        stderr_text = stderr.decode('utf-8', errors='ignore')
+                        self.logger.error(f"STDERR: {stderr_text}")
+
+                        # Check for common errors and provide solutions
+                        if "cannot open display" in stderr_text.lower():
+                            self.logger.error("SOLUTION: X11 display not accessible. Check DISPLAY env var and X permissions.")
+                        elif "gpu process" in stderr_text.lower():
+                            self.logger.error("SOLUTION: GPU process failed. Try disabling WebGL/WebGPU in config.")
+                        elif "permission denied" in stderr_text.lower():
+                            self.logger.error("SOLUTION: Permission issue. Check user permissions and file ownership.")
                 except Exception as comm_e:
                     self.logger.error(f"Could not read process output: {comm_e}")
                 self.is_running = False
