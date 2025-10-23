@@ -244,8 +244,7 @@ mkdir -p "$CONFIG_DIR"
 # Copy our web interface
 cp -r "$REPO_DIR/src/web/"* "$INSTALL_DIR/web/"
 
-# Copy WiFi monitor
-cp "$REPO_DIR/src/services/wifi_monitor.py" "$INSTALL_DIR/services/"
+# Note: monitor.py is created directly below, not copied
 
 # Update Flask app to use venv Python
 sed -i '1s|.*|#!/opt/ossuary/venv/bin/python3|' "$INSTALL_DIR/web/app.py"
