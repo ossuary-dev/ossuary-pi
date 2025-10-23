@@ -100,23 +100,51 @@ apt-get update >> "$LOG_FILE" 2>&1 || {
 
 # Install required packages
 log "Installing required packages..."
-apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-flask \
-    hostapd \
-    dnsmasq \
-    wireless-tools \
-    wpasupplicant \
-    net-tools \
-    git
 
-# Install Python packages
-log "Installing Python dependencies..."
-pip3 install -r "$REPO_DIR/requirements.txt" >> "$LOG_FILE" 2>&1 || {
-    error "Failed to install Python dependencies"
+# Core packages that must be installed
+CORE_PACKAGES="python3 python3-pip hostapd dnsmasq wireless-tools wpasupplicant net-tools git"
+
+# Python packages - try to install via apt first
+PYTHON_PACKAGES="python3-flask"
+
+# Optional packages - nice to have but not critical
+OPTIONAL_PACKAGES="python3-werkzeug"
+
+# Install core packages
+apt-get install -y $CORE_PACKAGES >> "$LOG_FILE" 2>&1 || {
+    error "Failed to install core packages"
     exit 1
 }
+
+# Install Python packages via apt
+apt-get install -y $PYTHON_PACKAGES >> "$LOG_FILE" 2>&1 || {
+    warning "Some Python packages not available via apt, will use pip"
+}
+
+# Try to install optional packages (don't fail if unavailable)
+for pkg in $OPTIONAL_PACKAGES; do
+    apt-get install -y $pkg >> "$LOG_FILE" 2>&1 || {
+        log "Optional package $pkg not available via apt"
+    }
+done
+
+# Check if additional Python packages are needed
+log "Checking Python dependencies..."
+
+# Try to import Flask and Werkzeug to verify they're installed
+if ! python3 -c "import flask; import werkzeug" 2>/dev/null; then
+    log "Installing additional Python dependencies..."
+    # For newer Debian/RPi OS with PEP 668, we need to use --break-system-packages
+    # since we're creating a system service that needs these packages
+    pip3 install --break-system-packages -r "$REPO_DIR/requirements.txt" >> "$LOG_FILE" 2>&1 || {
+        # If that fails, try without the flag for older systems
+        pip3 install -r "$REPO_DIR/requirements.txt" >> "$LOG_FILE" 2>&1 || {
+            warning "Could not install Python packages via pip, relying on apt packages"
+        }
+    }
+else
+    log "All Python dependencies satisfied via apt"
+fi
 
 # Create installation directories
 log "Creating directories..."
