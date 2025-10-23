@@ -635,12 +635,13 @@ class NetworkManager:
                         subprocess.run(["nmcli", "connection", "delete", conn_name],
                                      capture_output=True, timeout=10)
 
-            # Step 2: Create hotspot with password (FIXED)
+            # Step 2: Create hotspot with password (Trixie compatible)
             cmd = [
                 "nmcli", "device", "wifi", "hotspot",
                 "ifname", device_name,
                 "ssid", self.ap_config.ssid,
-                "password", self.ap_config.password or "ossuarypi"
+                "password", self.ap_config.password or "ossuarypi",
+                "band", "bg"  # Required for consistent behavior in NM 1.50+
             ]
 
             self.logger.info(f"Creating hotspot with password: {' '.join(cmd[:-1])} [password hidden]")
