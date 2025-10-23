@@ -51,12 +51,27 @@ fi
 
 # Check SSH warning
 if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
-    warning "Installing over SSH - services won't start until reboot"
+    warning "Installing over SSH detected!"
+    echo ""
+    echo "IMPORTANT: The captive portal setup may disconnect your SSH session"
+    echo "when it restarts the network services (dhcpcd restart)."
+    echo ""
+    echo "Recommendations:"
+    echo "  • Use Ethernet for SSH if possible"
+    echo "  • Have physical access as backup"
+    echo "  • Run in screen/tmux session"
+    echo ""
     echo "Continue? (y/N)"
     read -r response
     if [[ ! "$response" =~ ^[Yy]$ ]]; then
         exit 0
     fi
+
+    # Try to make it safer
+    warning "Will skip network restart during install"
+    SKIP_NETWORK_RESTART=1
+else
+    SKIP_NETWORK_RESTART=0
 fi
 
 # Check if already installed
@@ -149,10 +164,27 @@ chmod +x "$REPO_DIR/captive-portal/access-point/iptables-rules-dhcpcd.sh"
 log "Running raspi-captive-portal setup..."
 cd "$REPO_DIR/captive-portal"
 
+# If over SSH, patch their script to skip dhcpcd restart
+if [ "$SKIP_NETWORK_RESTART" -eq 1 ]; then
+    log "Patching setup script for SSH safety..."
+
+    # Create a modified version that doesn't restart dhcpcd
+    if [ -f "access-point/setup-access-point.sh" ]; then
+        cp access-point/setup-access-point.sh access-point/setup-access-point.sh.bak
+        sed -i 's/sudo systemctl restart dhcpcd/# Skipped for SSH safety - restart manually later/' \
+            access-point/setup-access-point.sh
+    fi
+fi
+
 # Auto-answer yes to their prompts
 echo "y" | sudo python3 setup.py >> "$LOG_FILE" 2>&1 || {
     warning "raspi-captive-portal setup had issues, continuing..."
 }
+
+# Restore original if we modified it
+if [ "$SKIP_NETWORK_RESTART" -eq 1 ] && [ -f "access-point/setup-access-point.sh.bak" ]; then
+    mv access-point/setup-access-point.sh.bak access-point/setup-access-point.sh
+fi
 
 # Stop and disable their Node.js server
 log "Disabling default captive portal server..."
@@ -356,5 +388,15 @@ echo "Status: systemctl status ossuary-monitor"
 echo "Logs: journalctl -fu ossuary-monitor"
 echo ""
 if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
-    echo "IMPORTANT: Reboot to activate all services"
+    echo "==========================================="
+    echo "    SSH Installation - Action Required"
+    echo "==========================================="
+    echo ""
+    echo "Since you installed over SSH, network services were not restarted."
+    echo ""
+    echo "To complete installation, either:"
+    echo "  1. Reboot: sudo reboot"
+    echo "  2. Or manually restart: sudo systemctl restart dhcpcd"
+    echo ""
+    echo "WARNING: Option 2 may disconnect your SSH session!"
 fi
