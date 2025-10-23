@@ -7,7 +7,7 @@ A lightweight Raspberry Pi configuration system that provides WiFi setup via cap
 - **Automatic WiFi Management**: Monitors WiFi connectivity and falls back to captive portal when disconnected
 - **Web-Based Configuration**: Simple web interface for WiFi setup and startup command configuration
 - **Auto-Restart Service**: User-defined command runs at startup with automatic restart on failure
-- **Captive Portal**: Based on [raspi-captive-portal](https://github.com/Splines/raspi-captive-portal) for reliable AP mode
+- **Captive Portal**: Fully integrated with [raspi-captive-portal](https://github.com/Splines/raspi-captive-portal) for professional AP management
 
 ## How It Works
 
@@ -20,20 +20,28 @@ A lightweight Raspberry Pi configuration system that provides WiFi setup via cap
 
 ## Installation
 
-1. **Check Requirements** (optional but recommended):
+### Integrated Installation (Recommended)
+Uses the proven `raspi-captive-portal` project for AP management:
+
+1. **Check Requirements**:
 ```bash
 ./check-requirements.sh
 ```
 
-2. **Install Ossuary**:
+2. **Install with Integration**:
 ```bash
-sudo ./install.sh
+sudo ./install-integrated.sh
 ```
 
-3. **Verify Installation** (optional):
-```bash
-sudo ./test-installation.sh
-```
+This will:
+- Install and configure `raspi-captive-portal` automatically
+- Set up our Flask configuration interface on top
+- Handle all the complex AP/hostapd/dnsmasq configuration for you
+
+### Alternative Installations
+
+- `sudo ./install.sh` - Original manual configuration
+- `sudo ./install-v2.sh` - NetworkManager-based for Pi OS 2025
 
 ## Uninstallation
 
