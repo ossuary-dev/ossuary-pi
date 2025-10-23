@@ -1,492 +1,174 @@
 #!/bin/bash
 
-# Ossuary Pi - Clean Installation Script
-# Uses raspi-captive-portal submodule for AP management
+# Ossuary Pi - Clean Installation using Balena WiFi Connect
+# SSH-safe installation with automatic recovery
 
 set -e
 
+# Configuration
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/ossuary"
 CONFIG_DIR="/etc/ossuary"
+CUSTOM_UI_DIR="$INSTALL_DIR/custom-ui"
 LOG_FILE="/tmp/ossuary-install.log"
 
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
+# Helper functions
 log() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
     echo -e "${GREEN}[INFO]${NC} $1"
 }
 
 error() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - ERROR: $1" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >> "$LOG_FILE"
     echo -e "${RED}[ERROR]${NC} $1" >&2
     exit 1
 }
 
 warning() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') - WARNING: $1" >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $1" >> "$LOG_FILE"
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-echo "==========================================="
-echo "    Ossuary Pi Installation"
-echo "==========================================="
-echo ""
-echo "This will install:"
-echo "  • raspi-captive-portal for AP management"
-echo "  • Ossuary web interface for WiFi/startup configuration"
-echo "  • Automatic failover when WiFi disconnects"
-echo ""
-echo "Installation log: $LOG_FILE"
-echo ""
+# SSH safety wrapper
+run_ssh_safe() {
+    local script_path="/tmp/ossuary-install-wrapped.sh"
 
-# Check root
-if [[ $EUID -ne 0 ]]; then
-   error "This script must be run as root (use sudo)"
-fi
-
-# Check SSH warning
-if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
-    warning "Installing over SSH detected!"
-    echo ""
-    echo "IMPORTANT: The captive portal setup may disconnect your SSH session"
-    echo "when it restarts the network services (dhcpcd restart)."
-    echo ""
-    echo "Recommendations:"
-    echo "  • Use Ethernet for SSH if possible"
-    echo "  • Have physical access as backup"
-    echo "  • Run in screen/tmux session"
-    echo ""
-    echo "Continue? (y/N)"
-    read -r response
-    if [[ ! "$response" =~ ^[Yy]$ ]]; then
-        exit 0
-    fi
-
-    # Try to make it safer
-    warning "Will skip network restart during install"
-    SKIP_NETWORK_RESTART=1
-else
-    SKIP_NETWORK_RESTART=0
-fi
-
-# Check if already installed
-if [ -d "$INSTALL_DIR" ]; then
-    warning "Previous installation found at $INSTALL_DIR"
-    echo "Remove and reinstall? (y/N)"
-    read -r response
-    if [[ "$response" =~ ^[Yy]$ ]]; then
-        log "Removing previous installation..."
-        systemctl stop ossuary-monitor 2>/dev/null || true
-        systemctl disable ossuary-monitor 2>/dev/null || true
-        rm -rf "$INSTALL_DIR"
-        rm -rf "$CONFIG_DIR"
-    else
-        exit 0
-    fi
-fi
-
-# Initialize git submodule
-log "Initializing raspi-captive-portal submodule..."
-cd "$REPO_DIR"
-if [ ! -f captive-portal/.git ]; then
-    git submodule update --init --recursive >> "$LOG_FILE" 2>&1 || error "Failed to init submodule"
-fi
-
-# Check if captive-portal exists
-if [ ! -d "$REPO_DIR/captive-portal" ]; then
-    error "captive-portal submodule not found. Run: git submodule update --init"
-fi
-
-# Install system packages
-log "Installing system packages..."
-apt-get update >> "$LOG_FILE" 2>&1 || error "Failed to update package lists"
-
-PACKAGES="python3 python3-pip python3-venv python3-flask git"
-apt-get install -y $PACKAGES >> "$LOG_FILE" 2>&1 || error "Failed to install packages"
-
-# Configure captive-portal settings BEFORE running their setup
-log "Configuring captive portal settings..."
-
-mkdir -p "$REPO_DIR/captive-portal/access-point"
-
-# Configure hostapd
-cat > "$REPO_DIR/captive-portal/access-point/hostapd.conf" << 'EOF'
-# Ossuary Access Point Configuration
-interface=wlan0
-driver=nl80211
-ssid=Ossuary-Setup
-hw_mode=g
-channel=7
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-# Open network (no password for captive portal)
-EOF
-
-# Configure dhcpcd
-cat > "$REPO_DIR/captive-portal/access-point/dhcpcd.conf" << 'EOF'
-interface wlan0
-    static ip_address=192.168.4.1/24
-    nohook wpa_supplicant
-EOF
-
-# Configure dnsmasq
-cat > "$REPO_DIR/captive-portal/access-point/dnsmasq.conf" << 'EOF'
-interface=wlan0
-bind-interfaces
-dhcp-range=192.168.4.10,192.168.4.100,255.255.255.0,24h
-
-# DNS settings
-domain=ossuary
-address=/ossuary.local/192.168.4.1
-
-# Captive portal - redirect all DNS to us
-address=/#/192.168.4.1
-EOF
-
-# Configure iptables rules (empty - we'll configure after their setup)
-cat > "$REPO_DIR/captive-portal/access-point/iptables-rules-dhcpcd.sh" << 'EOF'
+    # Create the actual installation script
+    cat > "$script_path" << 'WRAPPER_EOF'
 #!/bin/bash
-# Rules will be added after setup
-EOF
 
-chmod +x "$REPO_DIR/captive-portal/access-point/iptables-rules-dhcpcd.sh"
+LOG_FILE="/tmp/ossuary-install.log"
 
-# Run raspi-captive-portal setup (only the access point part, not Node.js)
-log "Running raspi-captive-portal access point setup..."
-cd "$REPO_DIR/captive-portal"
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    echo "$1"
+}
 
-# Handle SSH safety for raspi-captive-portal setup
-if [ "$SKIP_NETWORK_RESTART" -eq 1 ]; then
-    log "SSH session detected - using safe installation method"
+error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >> "$LOG_FILE"
+    echo "ERROR: $1" >&2
+    exit 1
+}
 
-    # Run the critical parts manually
-    log "Running captive portal setup in SSH-safe mode..."
+# Actual installation starts here
+REPO_DIR="REPO_DIR_PLACEHOLDER"
+INSTALL_DIR="/opt/ossuary"
+CONFIG_DIR="/etc/ossuary"
+CUSTOM_UI_DIR="$INSTALL_DIR/custom-ui"
 
-    # 1. Install required packages (safe)
-    apt-get install -y dhcpcd dnsmasq hostapd >> "$LOG_FILE" 2>&1
-    apt-get install -y netfilter-persistent iptables-persistent >> "$LOG_FILE" 2>&1
+log "Starting SSH-safe installation..."
 
-    # 2. Stop services (safe)
-    systemctl stop dnsmasq 2>/dev/null || true
-    systemctl stop hostapd 2>/dev/null || true
+# Step 1: Install dependencies
+log "Installing dependencies..."
+apt-get update >> "$LOG_FILE" 2>&1
+apt-get install -y network-manager python3 curl wget jq >> "$LOG_FILE" 2>&1
 
-    # 3. Configure dhcpcd WITHOUT restarting it
-    cat ./access-point/dhcpcd.conf >> /etc/dhcpcd.conf
-    log "dhcpcd configured but NOT restarted (SSH safety)"
-
-    # 4. Configure dnsmasq (safe)
-    [ -f /etc/dnsmasq.conf ] && mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
-    cp ./access-point/dnsmasq.conf /etc/dnsmasq.conf
-    echo "DNSMASQ_EXCEPT=lo" >> /etc/default/dnsmasq
-
-    # 5. Configure hostapd (safe)
-    cp ./access-point/hostapd.conf /etc/hostapd/hostapd.conf
-
-    # 6. Set up IP forwarding (safe)
-    if [ -f /etc/sysctl.conf ]; then
-        sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/g' /etc/sysctl.conf
-    else
-        echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ossuary.conf
-    fi
-
-    # 7. Configure iptables - redirect port 80 to 3000 for Flask
-    iptables -t nat -I PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:3000
-    netfilter-persistent save >> "$LOG_FILE" 2>&1
-
-    # 8. Enable services but don't start them
-    systemctl unmask dnsmasq hostapd
-    systemctl enable dnsmasq hostapd
-
-    warning "Network services configured but not started - reboot required"
-else
-    # Normal installation - we need to prevent dhcpcd restart from killing our script
-    log "Running raspi-captive-portal access point setup (modified for safety)..."
-
-    # Create a modified version of their setup script that doesn't restart dhcpcd
-    cp ./access-point/setup-access-point.sh ./access-point/setup-access-point-safe.sh
-    sed -i 's/sudo systemctl restart dhcpcd/# sudo systemctl restart dhcpcd # Skipped for installation safety/' ./access-point/setup-access-point-safe.sh
-    chmod +x ./access-point/setup-access-point-safe.sh >> "$LOG_FILE" 2>&1
-
-    # Run the modified setup script
-    if bash ./access-point/setup-access-point-safe.sh >> "$LOG_FILE" 2>&1; then
-        log "raspi-captive-portal access point setup completed successfully"
-        # Mark that dhcpcd needs restart later
-        NEEDS_DHCPCD_RESTART=1
-    else
-        warning "Access point setup had issues. Recent log output:"
-        echo "----------------------------------------"
-        tail -20 "$LOG_FILE"
-        echo "----------------------------------------"
-        echo "Full log available at: $LOG_FILE"
-        warning "Continuing with installation despite errors..."
-        NEEDS_DHCPCD_RESTART=1
-    fi
-
-    # Clean up temporary file
-    rm -f ./access-point/setup-access-point-safe.sh
+# Stop and disable dhcpcd if present
+if systemctl is-active --quiet dhcpcd; then
+    log "Disabling dhcpcd in favor of NetworkManager..."
+    systemctl stop dhcpcd >> "$LOG_FILE" 2>&1
+    systemctl disable dhcpcd >> "$LOG_FILE" 2>&1
 fi
 
-# Stop and disable their Node.js server (if it exists)
-log "Disabling default captive portal server..."
-systemctl stop access-point-server 2>/dev/null || true
-systemctl disable access-point-server 2>/dev/null || true
+# Step 2: Install WiFi Connect
+log "Installing Balena WiFi Connect..."
 
-# Note: We keep their iptables redirect (80->3000) since Flask now runs on port 3000
+# Detect architecture
+ARCH=$(uname -m)
+if [ "$ARCH" = "aarch64" ]; then
+    WIFI_CONNECT_ARCH="aarch64"
+elif [ "$ARCH" = "armv7l" ]; then
+    WIFI_CONNECT_ARCH="armv7hf"
+else
+    error "Unsupported architecture: $ARCH"
+fi
 
-# Create Python virtual environment for our code
-log "Setting up Python environment..."
-python3 -m venv "$INSTALL_DIR/venv"
-source "$INSTALL_DIR/venv/bin/activate"
-pip install --upgrade pip >> "$LOG_FILE" 2>&1
-pip install flask werkzeug >> "$LOG_FILE" 2>&1
+# Try official installer first
+if curl -L https://github.com/balena-io/wifi-connect/raw/master/scripts/raspbian-install.sh 2>/dev/null | bash >> "$LOG_FILE" 2>&1; then
+    log "WiFi Connect installed via official script"
+else
+    log "Official installer failed, trying manual installation..."
+    WIFI_CONNECT_VERSION=$(curl -s https://api.github.com/repos/balena-os/wifi-connect/releases/latest | jq -r '.tag_name')
+    DOWNLOAD_URL="https://github.com/balena-os/wifi-connect/releases/download/${WIFI_CONNECT_VERSION}/wifi-connect-linux-${WIFI_CONNECT_ARCH}.tar.gz"
 
-# Install our files
+    wget -O /tmp/wifi-connect.tar.gz "$DOWNLOAD_URL" >> "$LOG_FILE" 2>&1
+    tar -xzf /tmp/wifi-connect.tar.gz -C /usr/local/bin/ >> "$LOG_FILE" 2>&1
+    chmod +x /usr/local/bin/wifi-connect
+    rm /tmp/wifi-connect.tar.gz
+fi
+
+# Verify installation
+if ! command -v wifi-connect &> /dev/null; then
+    error "WiFi Connect installation failed"
+fi
+
+log "WiFi Connect installed successfully"
+
+# Step 3: Install our custom UI and scripts
 log "Installing Ossuary components..."
-mkdir -p "$INSTALL_DIR"/{services,web/templates,web/static}
+
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$CUSTOM_UI_DIR"
 mkdir -p "$CONFIG_DIR"
 
-# Copy our web interface
-cp -r "$REPO_DIR/src/web/"* "$INSTALL_DIR/web/"
-
-# Copy startup wrapper script if it exists
-if [ -f "$REPO_DIR/src/services/startup-wrapper.sh" ]; then
-    cp "$REPO_DIR/src/services/startup-wrapper.sh" "$INSTALL_DIR/services/"
-    chmod +x "$INSTALL_DIR/services/startup-wrapper.sh"
+# Copy custom UI
+if [ -d "$REPO_DIR/custom-ui" ]; then
+    cp -r "$REPO_DIR/custom-ui"/* "$CUSTOM_UI_DIR/"
+    log "Custom UI installed"
 fi
 
-# Note: monitor.py is created directly below, not copied
+# Copy scripts
+if [ -f "$REPO_DIR/scripts/startup-manager.sh" ]; then
+    cp "$REPO_DIR/scripts/startup-manager.sh" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/startup-manager.sh"
+fi
 
-# Update Flask app to use venv Python
-sed -i '1s|.*|#!/opt/ossuary/venv/bin/python3|' "$INSTALL_DIR/web/app.py"
-chmod +x "$INSTALL_DIR/web/app.py"
+if [ -f "$REPO_DIR/scripts/config-handler.py" ]; then
+    cp "$REPO_DIR/scripts/config-handler.py" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/config-handler.py"
+fi
 
-# Create simplified WiFi monitor
-cat > "$INSTALL_DIR/services/monitor.py" << 'EOF'
-#!/opt/ossuary/venv/bin/python3
+# Step 4: Create systemd services
+log "Creating systemd services..."
 
-import subprocess
-import time
-import logging
-import sys
-import os
-import signal
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('ossuary-monitor')
-
-CHECK_INTERVAL = 30
-FAIL_THRESHOLD = 60
-FLASK_PID_FILE = '/var/run/ossuary-flask.pid'
-
-def check_internet():
-    """Check internet connectivity"""
-    try:
-        result = subprocess.run(
-            ['ping', '-c', '1', '-W', '2', '8.8.8.8'],
-            capture_output=True,
-            timeout=5
-        )
-        return result.returncode == 0
-    except:
-        return False
-
-def check_wifi():
-    """Check if WiFi is connected"""
-    try:
-        result = subprocess.run(
-            ['iwgetid', '-r'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        return bool(result.stdout.strip())
-    except:
-        return False
-
-def is_flask_running():
-    """Check if Flask app is running"""
-    try:
-        if os.path.exists(FLASK_PID_FILE):
-            with open(FLASK_PID_FILE, 'r') as f:
-                pid = int(f.read().strip())
-                # Check if process exists
-                os.kill(pid, 0)
-                return True
-    except:
-        pass
-    return False
-
-def start_flask():
-    """Start Flask web interface"""
-    if not is_flask_running():
-        logger.info("Starting Flask web interface...")
-        proc = subprocess.Popen([
-            '/opt/ossuary/venv/bin/python3',
-            '/opt/ossuary/web/app.py'
-        ])
-        with open(FLASK_PID_FILE, 'w') as f:
-            f.write(str(proc.pid))
-        logger.info(f"Flask started with PID {proc.pid}")
-
-def stop_flask():
-    """Stop Flask web interface"""
-    try:
-        if os.path.exists(FLASK_PID_FILE):
-            with open(FLASK_PID_FILE, 'r') as f:
-                pid = int(f.read().strip())
-                os.kill(pid, signal.SIGTERM)
-                os.remove(FLASK_PID_FILE)
-                logger.info("Flask stopped")
-    except:
-        subprocess.run(['pkill', '-f', 'app.py'], check=False)
-
-def start_ap():
-    """Start access point mode"""
-    logger.info("Starting access point mode...")
-
-    # Start AP services
-    subprocess.run(['systemctl', 'start', 'hostapd'], check=False)
-    subprocess.run(['systemctl', 'start', 'dnsmasq'], check=False)
-
-    logger.info("Access point started")
-
-def stop_ap():
-    """Stop access point mode"""
-    logger.info("Stopping access point mode...")
-
-    # Stop AP services
-    subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
-    subprocess.run(['systemctl', 'stop', 'dnsmasq'], check=False)
-
-    # Restart normal WiFi
-    subprocess.run(['systemctl', 'restart', 'wpa_supplicant'], check=False)
-
-    logger.info("Access point stopped")
-
-def get_ip_address():
-    """Get current IP address"""
-    try:
-        result = subprocess.run(
-            ['hostname', '-I'],
-            capture_output=True,
-            text=True
-        )
-        ips = result.stdout.strip().split()
-        return ips[0] if ips else None
-    except:
-        return None
-
-def signal_handler(sig, frame):
-    logger.info("Shutting down...")
-    stop_flask()
-    stop_ap()
-    sys.exit(0)
-
-def main():
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-
-    logger.info("Ossuary Monitor started")
-
-    # Always start Flask web interface
-    start_flask()
-    time.sleep(2)  # Give Flask time to start
-
-    # Log access information
-    ip = get_ip_address()
-    if ip:
-        logger.info(f"Web interface available at http://{ip}")
-    logger.info("Direct Flask access at http://localhost:3000")
-
-    ap_active = False
-    fail_time = None
-
-    while True:
-        # Always ensure Flask stays running
-        if not is_flask_running():
-            logger.warning("Flask not running, restarting...")
-            start_flask()
-
-        # Check for manual AP mode flag
-        manual_ap_flag = '/tmp/ossuary_manual_ap'
-        is_manual_ap = os.path.exists(manual_ap_flag)
-
-        if is_manual_ap:
-            # During test mode: still monitor but don't take action
-            logger.debug("Manual TEST mode active - monitoring but not managing network")
-            has_wifi = check_wifi()
-            has_internet = check_internet() if has_wifi else False
-
-            # Log status but don't act on it
-            if not has_wifi:
-                logger.debug("TEST mode: WiFi is down (expected)")
-            elif not has_internet:
-                logger.debug("TEST mode: No internet (expected)")
-
-            # Keep track of time for when test mode ends
-            if not has_wifi and fail_time is None:
-                fail_time = time.time()
-
-            time.sleep(CHECK_INTERVAL)
-            continue
-
-        # Normal operation - manage network
-        has_wifi = check_wifi()
-        has_internet = check_internet() if has_wifi else False
-
-        if has_wifi and has_internet:
-            fail_time = None
-            if ap_active:
-                stop_ap()
-                ap_active = False
-                # Log new IP after reconnection
-                time.sleep(5)
-                ip = get_ip_address()
-                if ip:
-                    logger.info(f"Connected to WiFi. Web interface at http://{ip}")
-        else:
-            if fail_time is None:
-                fail_time = time.time()
-                logger.warning("Connection lost")
-
-            if time.time() - fail_time > FAIL_THRESHOLD and not ap_active:
-                start_ap()
-                ap_active = True
-                logger.info("AP mode active. Connect to 'Ossuary-Setup' and visit http://192.168.4.1")
-
-        time.sleep(CHECK_INTERVAL)
-
-if __name__ == '__main__':
-    main()
-EOF
-
-chmod +x "$INSTALL_DIR/services/monitor.py"
-
-# Create systemd service
-log "Creating systemd service..."
-cat > /etc/systemd/system/ossuary-monitor.service << EOF
+cat > /etc/systemd/system/wifi-connect.service << EOF
 [Unit]
-Description=Ossuary WiFi Monitor
-After=network-online.target
-Wants=network-online.target
-Before=ossuary-startup.service
+Description=Balena WiFi Connect
+After=NetworkManager.service
+Wants=NetworkManager.service
 
 [Service]
 Type=simple
-User=root
-ExecStart=$INSTALL_DIR/venv/bin/python3 $INSTALL_DIR/services/monitor.py
-Restart=always
+ExecStart=/usr/local/bin/wifi-connect \\
+    --portal-ssid "Ossuary-Setup" \\
+    --ui-directory $CUSTOM_UI_DIR \\
+    --activity-timeout 600 \\
+    --portal-listening-port 80
+Restart=on-failure
 RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/ossuary-startup.service << EOF
+[Unit]
+Description=Ossuary Startup Command Manager
+After=network-online.target wifi-connect.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/python3 $INSTALL_DIR/config-handler.py
+ExecStart=$INSTALL_DIR/startup-manager.sh
 StandardOutput=journal
 StandardError=journal
 
@@ -494,7 +176,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# Create default config (only if it doesn't exist)
+# Step 5: Create default configuration
 if [ ! -f "$CONFIG_DIR/config.json" ]; then
     log "Creating default configuration..."
     cat > "$CONFIG_DIR/config.json" << EOF
@@ -503,71 +185,330 @@ if [ ! -f "$CONFIG_DIR/config.json" ]; then
   "wifi_networks": []
 }
 EOF
-else
-    log "Preserving existing configuration..."
 fi
 
-# Set permissions
-chown -R root:root "$INSTALL_DIR"
-chown -R root:root "$CONFIG_DIR"
-
-# Enable network-online target (needed for proper service ordering)
-systemctl enable systemd-networkd-wait-online.service 2>/dev/null || true
-
-# Enable service
+# Step 6: Enable services
+log "Enabling services..."
 systemctl daemon-reload
-systemctl enable ossuary-monitor.service
+systemctl enable wifi-connect.service >> "$LOG_FILE" 2>&1
+systemctl enable ossuary-startup.service >> "$LOG_FILE" 2>&1
 
-# Handle dhcpcd restart if needed (do this AFTER everything else is installed)
-if [ "${NEEDS_DHCPCD_RESTART:-0}" -eq 1 ]; then
-    if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
-        warning "dhcpcd needs to be restarted but you're on SSH"
-        warning "The system will work after reboot, or run: sudo systemctl restart dhcpcd"
+# Step 7: Create uninstall script
+cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
+
+log "Installation completed successfully!"
+
+# Mark installation as complete
+touch /tmp/ossuary-install-complete
+
+# Schedule reboot
+log "Rebooting in 10 seconds..."
+(sleep 10 && reboot) &
+
+exit 0
+WRAPPER_EOF
+
+    # Replace placeholder with actual repo dir
+    sed -i "s|REPO_DIR_PLACEHOLDER|$REPO_DIR|g" "$script_path"
+    chmod +x "$script_path"
+
+    # Run in background with nohup
+    nohup bash "$script_path" > /tmp/ossuary-install-output.log 2>&1 &
+    local pid=$!
+
+    echo -e "${BLUE}Installation running in background (PID: $pid)${NC}"
+    echo -e "${BLUE}You can monitor progress with: tail -f $LOG_FILE${NC}"
+
+    # Wait a bit and check if it started successfully
+    sleep 3
+    if kill -0 $pid 2>/dev/null; then
+        echo -e "${GREEN}Installation is running...${NC}"
+
+        # Monitor for completion or timeout
+        local timeout=300  # 5 minutes
+        local elapsed=0
+
+        while [ $elapsed -lt $timeout ]; do
+            if [ -f /tmp/ossuary-install-complete ]; then
+                echo -e "${GREEN}Installation completed successfully!${NC}"
+                echo -e "${YELLOW}System will reboot in 10 seconds...${NC}"
+                return 0
+            fi
+
+            if ! kill -0 $pid 2>/dev/null; then
+                # Process ended, check if it was successful
+                if [ -f /tmp/ossuary-install-complete ]; then
+                    echo -e "${GREEN}Installation completed successfully!${NC}"
+                    return 0
+                else
+                    echo -e "${RED}Installation failed. Check $LOG_FILE for details.${NC}"
+                    return 1
+                fi
+            fi
+
+            sleep 5
+            elapsed=$((elapsed + 5))
+
+            # Show progress dot every 5 seconds
+            echo -n "."
+        done
+
+        echo ""
+        echo -e "${RED}Installation timeout. Check $LOG_FILE for details.${NC}"
+        return 1
     else
-        log "Restarting dhcpcd to apply network configuration..."
-        systemctl restart dhcpcd
+        echo -e "${RED}Failed to start installation. Check $LOG_FILE for details.${NC}"
+        return 1
     fi
-fi
+}
 
-# Start if not over SSH
-if [ -z "$SSH_CLIENT" ] && [ -z "$SSH_TTY" ]; then
-    systemctl start ossuary-monitor.service
-    log "Service started"
-else
-    warning "Service will start on reboot (SSH session detected)"
-fi
-
+# Main script starts here
+clear
+cat << "EOF"
+   ___                                      ____  _
+  / _ \ ___ ___ _   _  __ _ _ __ _   _    |  _ \(_)
+ | | | / __/ __| | | |/ _` | '__| | | |   | |_) | |
+ | |_| \__ \__ \ |_| | (_| | |  | |_| |   |  __/| |
+  \___/|___/___/\__,_|\__,_|_|   \__, |   |_|   |_|
+                                 |___/
+  WiFi Failover System with Captive Portal
+  Powered by Balena WiFi Connect
+EOF
 echo ""
 echo "==========================================="
-echo "    Installation Complete!"
-echo "==========================================="
 echo ""
-echo "Web Interface Access:"
-echo "  • When on WiFi: http://<pi-ip-address>"
-echo "  • In AP mode: http://192.168.4.1"
-echo "  • Direct Flask: http://localhost:3000"
-echo ""
-echo "To find your Pi's IP address: hostname -I"
-echo ""
-echo "Access Point (when WiFi fails):"
-echo "  • SSID: Ossuary-Setup (open network)"
-echo "  • URL: http://192.168.4.1"
-echo ""
-echo "Commands:"
-echo "  • Status: systemctl status ossuary-monitor"
-echo "  • Logs: journalctl -fu ossuary-monitor"
-echo "  • IP Address: hostname -I"
-echo ""
+
+# Initialize log
+echo "Installation started at $(date)" > "$LOG_FILE"
+
+# Check root
+if [[ $EUID -ne 0 ]]; then
+    error "This script must be run as root (use sudo)"
+fi
+
+# Detect SSH session
 if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
-    echo "==========================================="
-    echo "    SSH Installation - Action Required"
-    echo "==========================================="
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${YELLOW}         SSH SESSION DETECTED - IMPORTANT        ${NC}"
+    echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    echo "Since you installed over SSH, network services were not restarted."
+    echo "This installation will:"
+    echo "  1. Disable dhcpcd and enable NetworkManager"
+    echo "  2. Install WiFi Connect and dependencies"
+    echo "  3. Configure services"
+    echo -e "  4. ${YELLOW}REBOOT YOUR SYSTEM AUTOMATICALLY${NC}"
     echo ""
-    echo "To complete installation, either:"
-    echo "  1. Reboot: sudo reboot"
-    echo "  2. Or manually restart: sudo systemctl restart dhcpcd"
+    echo -e "${YELLOW}Your SSH connection WILL be disconnected.${NC}"
     echo ""
-    echo "WARNING: Option 2 may disconnect your SSH session!"
+    echo "The installation will continue even if SSH disconnects."
+    echo "The system will automatically reboot when complete."
+    echo ""
+    echo -e "${BLUE}After reboot:${NC}"
+    echo "  • Look for 'Ossuary-Setup' WiFi network if no WiFi found"
+    echo "  • Or SSH back in using the same IP address"
+    echo ""
+    echo -n "Do you want to continue? (yes/no): "
+    read -r response
+
+    if [ "$response" != "yes" ]; then
+        echo "Installation cancelled."
+        exit 0
+    fi
+
+    echo ""
+    echo -e "${BLUE}Starting SSH-safe installation...${NC}"
+    echo "Installation will continue in background even if this session disconnects."
+    echo ""
+
+    # Run installation in background
+    run_ssh_safe
+else
+    # Local installation - run normally
+    echo "Starting local installation..."
+
+    # Run the installation directly
+    bash -c "$(cat << 'LOCAL_INSTALL'
+
+# Same installation code as in the wrapper, but inline for local execution
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+INSTALL_DIR="/opt/ossuary"
+CONFIG_DIR="/etc/ossuary"
+CUSTOM_UI_DIR="$INSTALL_DIR/custom-ui"
+LOG_FILE="/tmp/ossuary-install.log"
+
+# Colors for local output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >> "$LOG_FILE"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+    exit 1
+}
+
+# Install dependencies
+log "Installing dependencies..."
+apt-get update
+apt-get install -y network-manager python3 curl wget jq
+
+# Stop and disable dhcpcd if present
+if systemctl is-active --quiet dhcpcd; then
+    log "Disabling dhcpcd in favor of NetworkManager..."
+    systemctl stop dhcpcd
+    systemctl disable dhcpcd
+fi
+
+# Install WiFi Connect
+log "Installing Balena WiFi Connect..."
+
+ARCH=$(uname -m)
+if [ "$ARCH" = "aarch64" ]; then
+    WIFI_CONNECT_ARCH="aarch64"
+elif [ "$ARCH" = "armv7l" ]; then
+    WIFI_CONNECT_ARCH="armv7hf"
+else
+    error "Unsupported architecture: $ARCH"
+fi
+
+# Try official installer
+if curl -L https://github.com/balena-io/wifi-connect/raw/master/scripts/raspbian-install.sh | bash; then
+    log "WiFi Connect installed via official script"
+else
+    log "Official installer failed, trying manual installation..."
+    WIFI_CONNECT_VERSION=$(curl -s https://api.github.com/repos/balena-os/wifi-connect/releases/latest | jq -r '.tag_name')
+    DOWNLOAD_URL="https://github.com/balena-os/wifi-connect/releases/download/${WIFI_CONNECT_VERSION}/wifi-connect-linux-${WIFI_CONNECT_ARCH}.tar.gz"
+
+    wget -O /tmp/wifi-connect.tar.gz "$DOWNLOAD_URL"
+    tar -xzf /tmp/wifi-connect.tar.gz -C /usr/local/bin/
+    chmod +x /usr/local/bin/wifi-connect
+    rm /tmp/wifi-connect.tar.gz
+fi
+
+# Verify installation
+if ! command -v wifi-connect &> /dev/null; then
+    error "WiFi Connect installation failed"
+fi
+
+log "WiFi Connect installed successfully"
+
+# Install our custom UI and scripts
+log "Installing Ossuary components..."
+
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$CUSTOM_UI_DIR"
+mkdir -p "$CONFIG_DIR"
+
+# Copy files
+if [ -d "$REPO_DIR/custom-ui" ]; then
+    cp -r "$REPO_DIR/custom-ui"/* "$CUSTOM_UI_DIR/"
+fi
+
+if [ -f "$REPO_DIR/scripts/startup-manager.sh" ]; then
+    cp "$REPO_DIR/scripts/startup-manager.sh" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/startup-manager.sh"
+fi
+
+if [ -f "$REPO_DIR/scripts/config-handler.py" ]; then
+    cp "$REPO_DIR/scripts/config-handler.py" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/config-handler.py"
+fi
+
+# Create systemd services
+log "Creating systemd services..."
+
+cat > /etc/systemd/system/wifi-connect.service << EOF
+[Unit]
+Description=Balena WiFi Connect
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wifi-connect \\
+    --portal-ssid "Ossuary-Setup" \\
+    --ui-directory $CUSTOM_UI_DIR \\
+    --activity-timeout 600 \\
+    --portal-listening-port 80
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/ossuary-startup.service << EOF
+[Unit]
+Description=Ossuary Startup Command Manager
+After=network-online.target wifi-connect.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStartPre=/usr/bin/python3 $INSTALL_DIR/config-handler.py
+ExecStart=$INSTALL_DIR/startup-manager.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Create default configuration
+if [ ! -f "$CONFIG_DIR/config.json" ]; then
+    log "Creating default configuration..."
+    cat > "$CONFIG_DIR/config.json" << EOF
+{
+  "startup_command": "",
+  "wifi_networks": []
+}
+EOF
+fi
+
+# Enable services
+log "Enabling services..."
+systemctl daemon-reload
+systemctl enable wifi-connect.service
+systemctl enable ossuary-startup.service
+
+# Copy uninstall script
+if [ -f "$REPO_DIR/uninstall.sh" ]; then
+    cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/uninstall.sh"
+fi
+
+# Start services
+log "Starting services..."
+systemctl start wifi-connect
+systemctl start ossuary-startup
+
+echo ""
+echo "==========================================="
+echo -e "${GREEN}    Installation Complete!${NC}"
+echo "==========================================="
+echo ""
+echo "WiFi Setup:"
+echo "  • If no WiFi found, AP 'Ossuary-Setup' will appear"
+echo "  • Connect to configure WiFi and startup command"
+echo "  • Portal accessible at http://192.168.4.1"
+echo ""
+echo "Configuration:"
+echo "  • Config stored in: $CONFIG_DIR/config.json"
+echo "  • Logs: journalctl -u wifi-connect"
+echo "  • Startup logs: /var/log/ossuary-startup.log"
+echo ""
+echo "To uninstall: sudo $INSTALL_DIR/uninstall.sh"
+echo ""
+echo "Services are now running!"
+
+LOCAL_INSTALL
+)"
 fi

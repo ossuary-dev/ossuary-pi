@@ -1,127 +1,268 @@
 #!/bin/bash
 
+# Ossuary Pi - Complete Uninstallation Script
+# Safely removes all Ossuary components and restores system
+
 set -e
 
-echo "==========================================="
-echo "    Ossuary Uninstallation Script"
-echo "==========================================="
+# Configuration
+INSTALL_DIR="/opt/ossuary"
+CONFIG_DIR="/etc/ossuary"
+LOG_FILE="/tmp/ossuary-uninstall.log"
 
-# Check if running as root
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Helper functions
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+    echo -e "${GREEN}[INFO]${NC} $1"
+}
+
+error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1" >> "$LOG_FILE"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+    exit 1
+}
+
+warning() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $1" >> "$LOG_FILE"
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# Header
+clear
+echo "==========================================="
+echo "    Ossuary Pi Uninstallation"
+echo "==========================================="
+echo ""
+echo "This will remove:"
+echo "  • Balena WiFi Connect"
+echo "  • Ossuary services and files"
+echo "  • Custom UI and scripts"
+echo ""
+echo -e "${YELLOW}Your WiFi configuration will be preserved.${NC}"
+echo ""
+
+# Check root
 if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root (use sudo)"
-   exit 1
+    error "This script must be run as root (use sudo)"
 fi
 
-echo ""
-echo "This will completely remove Ossuary from your system."
-read -p "Are you sure you want to continue? (y/N): " -n 1 -r
-echo ""
+# Confirm uninstallation
+echo -n "Are you sure you want to uninstall Ossuary? (yes/no): "
+read -r response
 
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+if [ "$response" != "yes" ]; then
     echo "Uninstallation cancelled."
     exit 0
 fi
 
+# Initialize log
+echo "Uninstallation started at $(date)" > "$LOG_FILE"
+
+# Ask about configuration preservation
 echo ""
-echo "Stopping services..."
+echo -n "Do you want to keep your configuration file? (yes/no): "
+read -r keep_config
 
-# Stop services
-systemctl stop ossuary-wifi-monitor.service 2>/dev/null || true
-systemctl stop ossuary-captive-portal.service 2>/dev/null || true
-systemctl stop ossuary-startup.service 2>/dev/null || true
+# Step 1: Stop services
+log "Stopping services..."
 
-echo "Disabling services..."
+# Stop services if they exist
+if systemctl list-units --full -all | grep -q "wifi-connect.service"; then
+    systemctl stop wifi-connect.service 2>/dev/null || true
+    log "WiFi Connect service stopped"
+fi
 
-# Disable services
-systemctl disable ossuary-wifi-monitor.service 2>/dev/null || true
-systemctl disable ossuary-captive-portal.service 2>/dev/null || true
+if systemctl list-units --full -all | grep -q "ossuary-startup.service"; then
+    systemctl stop ossuary-startup.service 2>/dev/null || true
+    log "Ossuary startup service stopped"
+fi
+
+# Kill any remaining wifi-connect processes
+pkill -f wifi-connect 2>/dev/null || true
+
+# Step 2: Disable services
+log "Disabling services..."
+
+systemctl disable wifi-connect.service 2>/dev/null || true
 systemctl disable ossuary-startup.service 2>/dev/null || true
 
-echo "Removing service files..."
+# Step 3: Remove service files
+log "Removing service files..."
 
-# Remove service files
-rm -f /etc/systemd/system/ossuary-wifi-monitor.service
-rm -f /etc/systemd/system/ossuary-captive-portal.service
+rm -f /etc/systemd/system/wifi-connect.service
 rm -f /etc/systemd/system/ossuary-startup.service
 
 # Reload systemd
 systemctl daemon-reload
 
-echo "Removing installation directories..."
+# Step 4: Remove WiFi Connect binary
+log "Removing WiFi Connect..."
 
-# Remove installation directories
-rm -rf /opt/ossuary
-rm -rf /etc/ossuary
+if [ -f /usr/local/bin/wifi-connect ]; then
+    rm -f /usr/local/bin/wifi-connect
+    log "WiFi Connect binary removed"
+fi
 
-echo "Restoring network configuration..."
+# Also check common installation paths
+rm -f /usr/bin/wifi-connect 2>/dev/null || true
+rm -f /opt/wifi-connect/wifi-connect 2>/dev/null || true
 
-# Restore dhcpcd configuration
-if [ -f /etc/dhcpcd.conf.ossuary-backup ]; then
-    mv /etc/dhcpcd.conf.ossuary-backup /etc/dhcpcd.conf
+# Step 5: Remove Ossuary files
+log "Removing Ossuary files..."
+
+# Remove installation directory
+if [ -d "$INSTALL_DIR" ]; then
+    rm -rf "$INSTALL_DIR"
+    log "Ossuary installation directory removed"
+fi
+
+# Handle configuration
+if [ "$keep_config" = "yes" ]; then
+    log "Preserving configuration in $CONFIG_DIR"
+    echo -e "${BLUE}Configuration preserved in: $CONFIG_DIR${NC}"
 else
-    # Remove our static IP configuration
-    sed -i '/^interface wlan0$/,/^$/d' /etc/dhcpcd.conf 2>/dev/null || true
+    if [ -d "$CONFIG_DIR" ]; then
+        # Backup config just in case
+        cp -r "$CONFIG_DIR" "/tmp/ossuary-config-backup-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+        rm -rf "$CONFIG_DIR"
+        log "Configuration directory removed (backup in /tmp)"
+    fi
 fi
 
-# Restore dnsmasq configuration
-if [ -f /etc/dnsmasq.conf.ossuary-backup ]; then
-    mv /etc/dnsmasq.conf.ossuary-backup /etc/dnsmasq.conf
-else
-    # Remove our dnsmasq configuration
-    > /etc/dnsmasq.conf
+# Step 6: Remove log files
+log "Cleaning up log files..."
+
+rm -f /var/log/ossuary*.log 2>/dev/null || true
+rm -f /tmp/ossuary*.log 2>/dev/null || true
+
+# Step 7: Network manager cleanup
+log "Checking network configuration..."
+
+# Ask about NetworkManager
+if command -v NetworkManager &> /dev/null; then
+    echo ""
+    echo "NetworkManager is currently managing your network."
+    echo -n "Do you want to re-enable dhcpcd instead? (yes/no): "
+    read -r use_dhcpcd
+
+    if [ "$use_dhcpcd" = "yes" ]; then
+        if command -v dhcpcd &> /dev/null; then
+            log "Re-enabling dhcpcd..."
+
+            # Stop NetworkManager
+            systemctl stop NetworkManager 2>/dev/null || true
+            systemctl disable NetworkManager 2>/dev/null || true
+
+            # Enable and start dhcpcd
+            systemctl enable dhcpcd 2>/dev/null || true
+
+            warning "dhcpcd enabled but not started (to preserve your connection)"
+            warning "You may need to reboot or manually start dhcpcd"
+        else
+            warning "dhcpcd not found. Please install it if needed: apt-get install dhcpcd5"
+        fi
+    else
+        log "Keeping NetworkManager as the network manager"
+    fi
 fi
 
-# Restore hostapd configuration
-if [ -f /etc/hostapd/hostapd.conf.ossuary-backup ]; then
-    mv /etc/hostapd/hostapd.conf.ossuary-backup /etc/hostapd/hostapd.conf
-else
-    rm -f /etc/hostapd/hostapd.conf
+# Step 8: Check for leftover processes
+log "Checking for leftover processes..."
+
+# Kill any Python processes related to Ossuary
+pkill -f "ossuary" 2>/dev/null || true
+pkill -f "config-handler.py" 2>/dev/null || true
+pkill -f "startup-manager" 2>/dev/null || true
+
+# Step 9: Clean up any temporary files
+log "Cleaning up temporary files..."
+
+rm -f /tmp/ossuary-install* 2>/dev/null || true
+rm -f /tmp/wifi-connect* 2>/dev/null || true
+
+# Step 10: Final verification
+log "Verifying uninstallation..."
+
+ISSUES=0
+
+# Check if services still exist
+if systemctl list-units --full -all | grep -q "wifi-connect\|ossuary"; then
+    warning "Some services may still be registered"
+    ISSUES=$((ISSUES + 1))
 fi
 
-echo "Removing iptables rules..."
-
-# Remove iptables rules
-iptables -t nat -D POSTROUTING -o eth0 -j MASQUERADE 2>/dev/null || true
-iptables -D FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
-iptables -D FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
-
-# Save cleaned iptables
-iptables-save > /etc/iptables.ipv4.nat
-
-# Remove IP forwarding configuration
-if [ -f /etc/sysctl.d/99-ossuary.conf ]; then
-    rm -f /etc/sysctl.d/99-ossuary.conf
-    sysctl --system > /dev/null 2>&1 || true
-elif [ -f /etc/sysctl.conf ]; then
-    sed -i '/^net.ipv4.ip_forward=1$/d' /etc/sysctl.conf 2>/dev/null || true
+# Check if files still exist
+if [ -d "$INSTALL_DIR" ]; then
+    warning "Installation directory still exists"
+    ISSUES=$((ISSUES + 1))
 fi
 
-# Remove iptables persistence service
-if [ -f /etc/systemd/system/ossuary-iptables.service ]; then
-    systemctl stop ossuary-iptables.service 2>/dev/null || true
-    systemctl disable ossuary-iptables.service 2>/dev/null || true
-    rm -f /etc/systemd/system/ossuary-iptables.service
+if [ -f /usr/local/bin/wifi-connect ]; then
+    warning "WiFi Connect binary still exists"
+    ISSUES=$((ISSUES + 1))
 fi
 
-# Remove saved iptables rules
-rm -f /etc/iptables/rules.v4
-
-# Remove NetworkManager configuration if exists
-rm -f /etc/NetworkManager/conf.d/99-ossuary.conf
-systemctl reload NetworkManager 2>/dev/null || true
-
-echo "Restarting network services..."
-
-# Restart network services
-systemctl restart dhcpcd 2>/dev/null || true
-systemctl restart networking 2>/dev/null || true
-
+# Final message
 echo ""
 echo "==========================================="
-echo "    Uninstallation Complete"
-echo "==========================================="
-echo ""
-echo "Ossuary has been removed from your system."
-echo "Your network configuration has been restored."
-echo ""
-echo "You may want to reboot to ensure all changes take effect."
+
+if [ $ISSUES -eq 0 ]; then
+    echo -e "${GREEN}    Uninstallation Complete!${NC}"
+    echo "==========================================="
+    echo ""
+    echo "Ossuary Pi has been successfully removed."
+
+    if [ "$keep_config" = "yes" ]; then
+        echo ""
+        echo "Your configuration was preserved in: $CONFIG_DIR"
+    fi
+
+    echo ""
+    echo "Network status:"
+    if systemctl is-active --quiet NetworkManager; then
+        echo "  • NetworkManager is active"
+    elif systemctl is-active --quiet dhcpcd; then
+        echo "  • dhcpcd is active"
+    else
+        echo "  • No network manager is currently active"
+        echo "  • You may need to configure networking manually"
+    fi
+
+    echo ""
+    echo "You may want to reboot to ensure all changes take effect."
+    echo ""
+else
+    echo -e "${YELLOW}    Uninstallation Completed with Warnings${NC}"
+    echo "==========================================="
+    echo ""
+    echo "Some components may not have been fully removed."
+    echo "Check the log for details: $LOG_FILE"
+    echo ""
+    echo "You can manually check for:"
+    echo "  • Services: systemctl list-units --all | grep -E 'wifi-connect|ossuary'"
+    echo "  • Files: ls -la /opt/ossuary /etc/ossuary"
+    echo "  • Processes: ps aux | grep -E 'wifi-connect|ossuary'"
+    echo ""
+fi
+
+# Save summary to log
+echo "" >> "$LOG_FILE"
+echo "Uninstallation completed at $(date)" >> "$LOG_FILE"
+echo "Issues found: $ISSUES" >> "$LOG_FILE"
+
+# Offer to show the log
+echo -n "Would you like to view the uninstallation log? (yes/no): "
+read -r show_log
+
+if [ "$show_log" = "yes" ]; then
+    less "$LOG_FILE"
+fi
+
+exit 0

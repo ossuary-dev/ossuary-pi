@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ossuary Setup</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .tab-container {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            color: #666;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+            border-bottom: 3px solid transparent;
+            margin-bottom: -2px;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .network-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+        }
+
+        .network-item {
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #f5f5f5;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .network-item:hover {
+            background: #e8e8e8;
+            transform: translateX(5px);
+        }
+
+        .network-item.selected {
+            background: #667eea;
+            color: white;
+        }
+
+        .network-name {
+            font-weight: 500;
+        }
+
+        .signal-strength {
+            font-size: 12px;
+            opacity: 0.8;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+            font-family: 'Courier New', monospace;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.3s, box-shadow 0.3s;
+            width: 100%;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .message.show {
+            display: block;
+        }
+
+        .spinner {
+            display: none;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        .spinner.show {
+            display: block;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .info-box {
+            background: #f0f4ff;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 5px;
+        }
+
+        .info-box h3 {
+            color: #667eea;
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .info-box p {
+            color: #666;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Ossuary Configuration</h1>
+        <p class="subtitle">Configure WiFi and startup commands for your device</p>
+
+        <div class="tab-container">
+            <button class="tab active" onclick="switchTab('wifi')">WiFi Setup</button>
+            <button class="tab" onclick="switchTab('startup')">Startup Command</button>
+        </div>
+
+        <div id="message" class="message"></div>
+
+        <!-- WiFi Tab -->
+        <div id="wifi-tab" class="tab-content active">
+            <div class="input-group">
+                <label>Available Networks</label>
+                <div class="network-list" id="networks">
+                    <div class="spinner show"></div>
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label for="password">WiFi Password</label>
+                <input type="password" id="password" placeholder="Enter password (leave empty for open networks)">
+            </div>
+
+            <button onclick="connectWiFi()" id="connect-btn">Connect to Network</button>
+
+            <div class="info-box">
+                <h3>Connection Status</h3>
+                <p id="status">Scanning for networks...</p>
+            </div>
+        </div>
+
+        <!-- Startup Tab -->
+        <div id="startup-tab" class="tab-content">
+            <div class="input-group">
+                <label for="startup-cmd">Startup Command</label>
+                <textarea id="startup-cmd" placeholder="Example: python3 /home/pi/my_script.py"></textarea>
+            </div>
+
+            <button onclick="saveStartupCommand()">Save Startup Command</button>
+
+            <div class="info-box">
+                <h3>About Startup Commands</h3>
+                <p>This command will run automatically when your device boots and has network connectivity. Make sure to use full paths to executables and scripts.</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedNetwork = null;
+        let isConnecting = false;
+
+        // Tab switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+            if (tab === 'wifi') {
+                document.querySelectorAll('.tab')[0].classList.add('active');
+                document.getElementById('wifi-tab').classList.add('active');
+            } else {
+                document.querySelectorAll('.tab')[1].classList.add('active');
+                document.getElementById('startup-tab').classList.add('active');
+                loadStartupCommand();
+            }
+        }
+
+        // Show message
+        function showMessage(text, type) {
+            const msg = document.getElementById('message');
+            msg.textContent = text;
+            msg.className = `message ${type} show`;
+            setTimeout(() => msg.classList.remove('show'), 5000);
+        }
+
+        // Load WiFi networks
+        async function loadNetworks() {
+            try {
+                const response = await fetch('/networks');
+                const networks = await response.json();
+
+                const container = document.getElementById('networks');
+                container.innerHTML = '';
+
+                if (networks.length === 0) {
+                    container.innerHTML = '<p style="color: #666; text-align: center;">No networks found</p>';
+                    return;
+                }
+
+                networks.forEach(network => {
+                    const item = document.createElement('div');
+                    item.className = 'network-item';
+                    item.innerHTML = `
+                        <div>
+                            <div class="network-name">${network.ssid}</div>
+                            <div class="signal-strength">Signal: ${network.signal || 'Unknown'}%</div>
+                        </div>
+                        <div>${network.encrypted ? '🔒' : '📡'}</div>
+                    `;
+                    item.onclick = () => selectNetwork(network.ssid, item);
+                    container.appendChild(item);
+                });
+
+                document.getElementById('status').textContent = `Found ${networks.length} networks`;
+            } catch (error) {
+                console.error('Error loading networks:', error);
+                document.getElementById('networks').innerHTML = '<p style="color: red;">Error loading networks</p>';
+                document.getElementById('status').textContent = 'Error scanning networks';
+            }
+        }
+
+        // Select network
+        function selectNetwork(ssid, element) {
+            document.querySelectorAll('.network-item').forEach(item =>
+                item.classList.remove('selected')
+            );
+            element.classList.add('selected');
+            selectedNetwork = ssid;
+            document.getElementById('connect-btn').textContent = `Connect to ${ssid}`;
+        }
+
+        // Connect to WiFi
+        async function connectWiFi() {
+            if (!selectedNetwork) {
+                showMessage('Please select a network first', 'error');
+                return;
+            }
+
+            if (isConnecting) return;
+            isConnecting = true;
+
+            const btn = document.getElementById('connect-btn');
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = 'Connecting...';
+
+            try {
+                const response = await fetch('/connect', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        ssid: selectedNetwork,
+                        passphrase: document.getElementById('password').value
+                    })
+                });
+
+                if (response.ok) {
+                    showMessage('Connecting to network... Device will restart networking.', 'success');
+                    document.getElementById('status').textContent = 'Connection initiated. Please wait...';
+
+                    // Save startup command if present
+                    const startupCmd = document.getElementById('startup-cmd').value;
+                    if (startupCmd) {
+                        localStorage.setItem('startup_command', startupCmd);
+                    }
+
+                    setTimeout(() => {
+                        document.getElementById('status').textContent = 'If successful, device will be accessible on the network.';
+                    }, 5000);
+                } else {
+                    showMessage('Failed to connect. Please check password.', 'error');
+                    document.getElementById('status').textContent = 'Connection failed';
+                }
+            } catch (error) {
+                showMessage('Connection error: ' + error.message, 'error');
+                document.getElementById('status').textContent = 'Error connecting';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = originalText;
+                isConnecting = false;
+            }
+        }
+
+        // Load startup command from localStorage or config
+        async function loadStartupCommand() {
+            // First check localStorage
+            const savedCmd = localStorage.getItem('startup_command');
+            if (savedCmd) {
+                document.getElementById('startup-cmd').value = savedCmd;
+                return;
+            }
+
+            // Try to load from config file
+            try {
+                const response = await fetch('/etc/ossuary/config.json');
+                if (response.ok) {
+                    const config = await response.json();
+                    document.getElementById('startup-cmd').value = config.startup_command || '';
+                }
+            } catch (error) {
+                // Config doesn't exist yet, that's fine
+            }
+        }
+
+        // Save startup command
+        function saveStartupCommand() {
+            const command = document.getElementById('startup-cmd').value.trim();
+
+            // Save to localStorage
+            localStorage.setItem('startup_command', command);
+
+            // Also save to a form field that can be read by WiFi Connect
+            // We'll write this to a file after connection
+            showMessage('Startup command saved. It will be configured after WiFi connection.', 'success');
+
+            // Create a hidden config that will be processed after connection
+            const config = {
+                startup_command: command,
+                saved_at: new Date().toISOString()
+            };
+
+            localStorage.setItem('ossuary_config', JSON.stringify(config));
+        }
+
+        // Initialize
+        window.onload = () => {
+            loadNetworks();
+            loadStartupCommand();
+
+            // Refresh networks every 10 seconds
+            setInterval(loadNetworks, 10000);
+        };
+    </script>
+</body>
+</html>
