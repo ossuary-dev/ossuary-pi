@@ -27,13 +27,6 @@ if [[ -f '/tmp/ossuary_install_functions.sh' ]]; then
     source '/tmp/ossuary_install_functions.sh'
 fi
 
-LOG_FILE="/var/log/ossuary-post-install.log"
-touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/ossuary-post-install.log"
-
-log() {
-    echo "$(date): $1" | tee -a "$LOG_FILE"
-}
-
 # Function to check if DNS configuration is needed
 check_if_dns_needed() {
     log "Checking if DNS configuration is needed..."
