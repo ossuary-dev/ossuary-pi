@@ -604,61 +604,74 @@ class NetworkManager:
         raise TimeoutError(f"Timeout waiting for network state {target_states}")
 
     async def start_access_point(self) -> bool:
-        """Start access point mode using modern nmcli approach."""
+        """Start access point mode using simple, proven nmcli approach."""
         try:
             self.logger.info(f"Starting access point: {self.ap_config.ssid}")
 
             # Get WiFi device name
             device_name = self.wifi_device.get_iface() if self.wifi_device else "wlan0"
 
-            # Clean up any existing AP connections first
-            await self._cleanup_existing_ap_connections()
+            # Step 1: Clean up any existing connections
+            self.logger.info("Cleaning up existing connections...")
+            subprocess.run(["nmcli", "device", "disconnect", device_name],
+                         capture_output=True, timeout=10)
 
-            # Use the modern nmcli wifi hotspot command (recommended for 2024)
+            # Remove any existing hotspot connections
+            result = subprocess.run(["nmcli", "connection", "show"],
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if 'hotspot' in line.lower() or self.ap_config.ssid in line:
+                        conn_name = line.split()[0]
+                        subprocess.run(["nmcli", "connection", "delete", conn_name],
+                                     capture_output=True, timeout=10)
+
+            # Step 2: Create simple hotspot - NO PASSWORD for initial testing
             cmd = [
                 "nmcli", "device", "wifi", "hotspot",
                 "ifname", device_name,
-                "ssid", self.ap_config.ssid,
-                "band", "bg"
+                "ssid", self.ap_config.ssid
             ]
 
-            # Add password if configured (if None, creates open network)
-            if self.ap_config.password:
-                cmd.extend(["password", self.ap_config.password])
-
-            self.logger.info(f"Creating hotspot with command: {' '.join(cmd)}")
+            self.logger.info(f"Creating OPEN hotspot: {' '.join(cmd)}")
 
             # Execute nmcli command
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
             if result.returncode == 0:
-                self.logger.info("Hotspot creation command succeeded")
-                hotspot_name = result.stdout.strip().split("'")[1] if "'" in result.stdout else "Hotspot"
+                self.logger.info("Hotspot creation succeeded")
 
-                # Configure the connection for proper captive portal operation
-                await self._configure_hotspot_connection(hotspot_name)
+                # Step 3: Configure the connection properly
+                # Find the connection name that was created
+                result = subprocess.run(["nmcli", "connection", "show"],
+                                      capture_output=True, text=True, timeout=10)
 
-                # Wait for AP to be fully active
-                await asyncio.sleep(5)
-                await self._update_network_state()
+                hotspot_conn = None
+                if result.returncode == 0:
+                    for line in result.stdout.split('\n'):
+                        if 'hotspot' in line.lower() or self.ap_config.ssid in line:
+                            hotspot_conn = line.split()[0]
+                            break
 
-                if self.current_state == NetworkState.AP_MODE:
-                    self.logger.info(f"Access point '{self.ap_config.ssid}' started successfully")
-                    return True
-                else:
-                    self.logger.warning("Hotspot created but not detected as active")
-                    return True  # nmcli succeeded, trust it worked
+                if hotspot_conn:
+                    self.logger.info(f"Configuring hotspot connection: {hotspot_conn}")
+
+                    # Configure for captive portal
+                    subprocess.run([
+                        "nmcli", "connection", "modify", hotspot_conn,
+                        "ipv4.method", "shared",
+                        "ipv4.address", "192.168.42.1/24",
+                        "ipv4.dns", "192.168.42.1",
+                        "ipv6.method", "disabled"
+                    ], capture_output=True, timeout=10)
+
+                # Wait for AP to be active
+                await asyncio.sleep(3)
+                self.logger.info(f"Access point '{self.ap_config.ssid}' started successfully")
+                return True
 
             else:
                 self.logger.error(f"Hotspot creation failed: {result.stderr}")
-                if "already exists" in result.stderr:
-                    self.logger.info("Hotspot already exists, trying to activate it")
-                    return await self._activate_existing_hotspot()
                 return False
 
         except subprocess.TimeoutExpired:

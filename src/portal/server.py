@@ -112,14 +112,55 @@ class PortalServer:
         async def index(request: Request):
             """Serve main portal page."""
             try:
-                config = await self.config_manager.load_config()
-                return templates.TemplateResponse(
-                    "index.html",
-                    {"request": request, "config": config.dict()}
-                )
+                # Try to serve the simple portal first
+                if (self.templates_dir / "simple-portal.html").exists():
+                    return templates.TemplateResponse(
+                        "simple-portal.html",
+                        {"request": request}
+                    )
+                else:
+                    # Fallback to basic HTML if template missing
+                    return HTMLResponse("""
+                    <!DOCTYPE html>
+                    <html><head><title>Ossuary Setup</title>
+                    <meta name="viewport" content="width=device-width,initial-scale=1">
+                    <style>body{font-family:Arial;padding:20px;text-align:center;}
+                    .container{max-width:400px;margin:0 auto;background:#f5f5f5;padding:30px;border-radius:10px;}
+                    input,button{width:100%;padding:10px;margin:10px 0;font-size:16px;}
+                    button{background:#007AFF;color:white;border:none;border-radius:5px;cursor:pointer;}
+                    </style></head><body>
+                    <div class="container">
+                    <h1>🏺 Ossuary Setup</h1>
+                    <p>WiFi configuration portal</p>
+                    <input type="text" placeholder="WiFi Name" id="ssid">
+                    <input type="password" placeholder="WiFi Password" id="password">
+                    <button onclick="connect()">Connect</button>
+                    <script>
+                    function connect(){
+                        const ssid=document.getElementById('ssid').value;
+                        const password=document.getElementById('password').value;
+                        if(!ssid) {alert('Enter WiFi name'); return;}
+                        fetch('/api/network/connect',{
+                            method:'POST',
+                            headers:{'Content-Type':'application/json'},
+                            body:JSON.stringify({ssid,password})
+                        }).then(r=>r.json()).then(d=>{
+                            if(d.success) alert('Connected!'); else alert('Failed: '+d.message);
+                        });
+                    }
+                    </script>
+                    </div></body></html>
+                    """)
             except Exception as e:
                 self.logger.error(f"Failed to serve index: {e}")
-                raise HTTPException(status_code=500, detail="Internal server error")
+                # Return ultra-basic HTML that always works
+                return HTMLResponse("""
+                <html><body style="font-family:Arial;text-align:center;padding:50px;">
+                <h1>Ossuary Setup</h1>
+                <p>Portal is running but templates not found</p>
+                <p>Connect to configure WiFi</p>
+                </body></html>
+                """)
 
         @app.get("/starter", response_class=HTMLResponse)
         async def starter_page(request: Request):
@@ -149,28 +190,36 @@ class PortalServer:
                 self.logger.error(f"Failed to serve starter page: {e}")
                 raise HTTPException(status_code=500, detail="Internal server error")
 
-        # Captive portal detection endpoints
+        # Captive portal detection endpoints - MORE COMPREHENSIVE
         @app.get("/generate_204")
         @app.get("/gen_204")
-        async def captive_portal_detection():
+        @app.head("/generate_204")
+        @app.head("/gen_204")
+        async def captive_portal_android():
             """Handle captive portal detection (Android)."""
+            # Android expects 204 No Content for internet, redirect for captive portal
             return RedirectResponse(url="/", status_code=302)
 
         @app.get("/hotspot-detect.html")
         @app.get("/library/test/success.html")
+        @app.get("/captive-portal-detect")
         async def captive_portal_apple():
             """Handle captive portal detection (Apple)."""
             return RedirectResponse(url="/", status_code=302)
 
         @app.get("/connecttest.txt")
         @app.get("/redirect")
+        @app.get("/msftconnecttest/connecttest.txt")
+        @app.get("/ncsi.txt")
         async def captive_portal_windows():
-            """Handle captive portal detection (Windows)."""
+            """Handle captive portal detection (Windows/Microsoft)."""
             return RedirectResponse(url="/", status_code=302)
 
         @app.get("/success.txt")
-        async def captive_portal_success():
-            """Handle success redirect."""
+        @app.get("/kindle-wifi/wifiredirect.html")
+        @app.get("/sony-wifi/")
+        async def captive_portal_others():
+            """Handle other device captive portal detection."""
             return RedirectResponse(url="/", status_code=302)
 
         # Catch-all route for captive portal
