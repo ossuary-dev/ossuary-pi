@@ -150,12 +150,10 @@ address=/ossuary.local/192.168.4.1
 address=/#/192.168.4.1
 EOF
 
-# Configure iptables rules
+# Configure iptables rules (empty - we'll configure after their setup)
 cat > "$REPO_DIR/captive-portal/access-point/iptables-rules-dhcpcd.sh" << 'EOF'
 #!/bin/bash
-# Forward HTTP traffic to our server
-iptables -t nat -A PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:8080
-iptables -t nat -A PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.4.1:8080
+# Rules will be added after setup
 EOF
 
 chmod +x "$REPO_DIR/captive-portal/access-point/iptables-rules-dhcpcd.sh"
@@ -164,32 +162,72 @@ chmod +x "$REPO_DIR/captive-portal/access-point/iptables-rules-dhcpcd.sh"
 log "Running raspi-captive-portal setup..."
 cd "$REPO_DIR/captive-portal"
 
-# If over SSH, patch their script to skip dhcpcd restart
+# Handle SSH safety for raspi-captive-portal setup
 if [ "$SKIP_NETWORK_RESTART" -eq 1 ]; then
-    log "Patching setup script for SSH safety..."
+    log "SSH session detected - using safe installation method"
 
-    # Create a modified version that doesn't restart dhcpcd
-    if [ -f "access-point/setup-access-point.sh" ]; then
-        cp access-point/setup-access-point.sh access-point/setup-access-point.sh.bak
-        sed -i 's/sudo systemctl restart dhcpcd/# Skipped for SSH safety - restart manually later/' \
-            access-point/setup-access-point.sh
-    fi
-fi
+    # Instead of modifying their script, we'll run the critical parts manually
+    log "Running captive portal setup in SSH-safe mode..."
 
-# Auto-answer yes to their prompts
-echo "y" | sudo python3 setup.py >> "$LOG_FILE" 2>&1 || {
-    warning "raspi-captive-portal setup had issues, continuing..."
-}
+    # 1. Install required packages (safe)
+    apt-get install -y dhcpcd dnsmasq hostapd >> "$LOG_FILE" 2>&1
+    apt-get install -y netfilter-persistent iptables-persistent >> "$LOG_FILE" 2>&1
 
-# Restore original if we modified it
-if [ "$SKIP_NETWORK_RESTART" -eq 1 ] && [ -f "access-point/setup-access-point.sh.bak" ]; then
-    mv access-point/setup-access-point.sh.bak access-point/setup-access-point.sh
+    # 2. Stop services (safe)
+    systemctl stop dnsmasq 2>/dev/null || true
+    systemctl stop hostapd 2>/dev/null || true
+
+    # 3. Configure dhcpcd WITHOUT restarting it
+    cat ./access-point/dhcpcd.conf >> /etc/dhcpcd.conf
+    log "dhcpcd configured but NOT restarted (SSH safety)"
+
+    # 4. Configure dnsmasq (safe)
+    [ -f /etc/dnsmasq.conf ] && mv /etc/dnsmasq.conf /etc/dnsmasq.conf.orig
+    cp ./access-point/dnsmasq.conf /etc/dnsmasq.conf
+    echo "DNSMASQ_EXCEPT=lo" >> /etc/default/dnsmasq
+
+    # 5. Configure hostapd (safe)
+    cp ./access-point/hostapd.conf /etc/hostapd/hostapd.conf
+
+    # 6. Set up IP forwarding (safe)
+    sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/g' /etc/sysctl.conf
+
+    # 7. Configure iptables (safe)
+    iptables -t nat -I PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:8080
+    iptables -t nat -I PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.4.1:8080
+    netfilter-persistent save >> "$LOG_FILE" 2>&1
+
+    # 8. Enable services but don't start them
+    systemctl unmask dnsmasq hostapd
+    systemctl enable dnsmasq hostapd
+
+    # 9. Run their server setup (should be safe)
+    cd "$REPO_DIR/captive-portal"
+    bash ./access-point/setup-server.sh >> "$LOG_FILE" 2>&1 || true
+
+    warning "Network services configured but not started - reboot required"
+else
+    # Normal installation - run their setup script as intended
+    log "Running standard raspi-captive-portal setup..."
+    echo "y" | sudo python3 setup.py >> "$LOG_FILE" 2>&1 || {
+        warning "raspi-captive-portal setup had issues, continuing..."
+    }
 fi
 
 # Stop and disable their Node.js server
 log "Disabling default captive portal server..."
 systemctl stop access-point-server 2>/dev/null || true
 systemctl disable access-point-server 2>/dev/null || true
+
+# Fix iptables to redirect to our Flask app on 8080 instead of their Node.js on 3000
+log "Updating iptables for Flask app..."
+if [ "$SKIP_NETWORK_RESTART" -eq 0 ]; then
+    # Only do this if we ran their full setup
+    iptables -t nat -D PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:3000 2>/dev/null || true
+    iptables -t nat -I PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:8080
+    iptables -t nat -I PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.4.1:8080
+    netfilter-persistent save >> "$LOG_FILE" 2>&1
+fi
 
 # Create Python virtual environment for our code
 log "Setting up Python environment..."
