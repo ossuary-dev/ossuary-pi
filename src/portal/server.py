@@ -140,7 +140,7 @@ class PortalServer:
                         const ssid=document.getElementById('ssid').value;
                         const password=document.getElementById('password').value;
                         if(!ssid) {alert('Enter WiFi name'); return;}
-                        fetch('/api/network/connect',{
+                        fetch('/api/v1/network/connect',{
                             method:'POST',
                             headers:{'Content-Type':'application/json'},
                             body:JSON.stringify({ssid,password})

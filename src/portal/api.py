@@ -72,24 +72,43 @@ class APIRouter:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.router.post("/network/connect", response_model=APIResponse)
-        async def connect_network(request: NetworkConnectRequest, background_tasks: BackgroundTasks):
-            """Connect to a WiFi network."""
+        async def connect_network(request: NetworkConnectRequest):
+            """Connect to a WiFi network with immediate feedback."""
             try:
-                # Start connection in background
-                background_tasks.add_task(
-                    self._connect_to_network,
-                    request.ssid,
-                    request.password
+                self.logger.info(f"Attempting to connect to WiFi: {request.ssid}")
+
+                # Try connection with timeout
+                success = await asyncio.wait_for(
+                    self.network_manager.connect_to_network(request.ssid, request.password),
+                    timeout=30.0  # 30 second timeout
                 )
 
+                if success:
+                    return APIResponse(
+                        success=True,
+                        message=f"Successfully connected to {request.ssid}",
+                        timestamp=datetime.now()
+                    )
+                else:
+                    return APIResponse(
+                        success=False,
+                        message=f"Failed to connect to {request.ssid}. Check password and try again.",
+                        timestamp=datetime.now()
+                    )
+            except asyncio.TimeoutError:
+                self.logger.error(f"Connection to {request.ssid} timed out")
                 return APIResponse(
-                    success=True,
-                    message=f"Connecting to {request.ssid}...",
+                    success=False,
+                    message=f"Connection to {request.ssid} timed out. Check if network is in range.",
                     timestamp=datetime.now()
                 )
             except Exception as e:
                 self.logger.error(f"Failed to connect to network: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                return APIResponse(
+                    success=False,
+                    message=f"Connection failed: {str(e)}",
+                    timestamp=datetime.now()
+                )
 
         @self.router.get("/network/networks", response_model=NetworkListResponse)
         async def get_known_networks():

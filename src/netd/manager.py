@@ -539,12 +539,21 @@ class NetworkManager:
                 self.logger.info(f"Successfully connected to {ssid}")
                 return True
             else:
-                self.logger.error(f"Failed to connect to {ssid}")
+                self.logger.error(f"Failed to connect to {ssid}, falling back to AP mode")
+                # Start AP mode as fallback
+                await asyncio.sleep(2)
+                await self.start_access_point()
                 return False
 
         except Exception as e:
-            self.logger.error(f"Connection error: {e}")
-            raise ConnectionError(f"Failed to connect to {ssid}: {e}")
+            self.logger.error(f"Connection error: {e}, falling back to AP mode")
+            # Critical error - ensure we fall back to AP mode
+            try:
+                await asyncio.sleep(2)
+                await self.start_access_point()
+            except Exception as fallback_error:
+                self.logger.error(f"Even AP fallback failed: {fallback_error}")
+            return False
 
     def _create_connection(self, ssid: str, password: Optional[str] = None) -> NM.Connection:
         """Create a new WiFi connection."""
@@ -626,14 +635,15 @@ class NetworkManager:
                         subprocess.run(["nmcli", "connection", "delete", conn_name],
                                      capture_output=True, timeout=10)
 
-            # Step 2: Create simple hotspot - NO PASSWORD for initial testing
+            # Step 2: Create hotspot with password (FIXED)
             cmd = [
                 "nmcli", "device", "wifi", "hotspot",
                 "ifname", device_name,
-                "ssid", self.ap_config.ssid
+                "ssid", self.ap_config.ssid,
+                "password", self.ap_config.password or "ossuarypi"
             ]
 
-            self.logger.info(f"Creating OPEN hotspot: {' '.join(cmd)}")
+            self.logger.info(f"Creating hotspot with password: {' '.join(cmd[:-1])} [password hidden]")
 
             # Execute nmcli command
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -656,22 +666,27 @@ class NetworkManager:
                 if hotspot_conn:
                     self.logger.info(f"Configuring hotspot connection: {hotspot_conn}")
 
-                    # Configure for captive portal
-                    subprocess.run([
-                        "nmcli", "connection", "modify", hotspot_conn,
-                        "ipv4.method", "shared",
-                        "ipv4.address", "192.168.42.1/24",
-                        "ipv4.dns", "192.168.42.1",
-                        "ipv6.method", "disabled"
-                    ], capture_output=True, timeout=10)
+                    # Use the proper configuration method that includes all captive portal settings
+                    await self._configure_hotspot_connection(hotspot_conn)
 
                 # Wait for AP to be active
-                await asyncio.sleep(3)
-                self.logger.info(f"Access point '{self.ap_config.ssid}' started successfully")
-                return True
+                await asyncio.sleep(5)
+
+                # Verify state
+                await self._update_network_state()
+
+                if self.current_state == NetworkState.AP_MODE:
+                    self.logger.info(f"Access point '{self.ap_config.ssid}' started and verified successfully")
+                    return True
+                else:
+                    self.logger.warning("Hotspot created but not detected as active, continuing anyway")
+                    return True  # nmcli succeeded, assume it's working
 
             else:
                 self.logger.error(f"Hotspot creation failed: {result.stderr}")
+                if "already exists" in result.stderr.lower():
+                    self.logger.info("Hotspot connection already exists, trying to activate it")
+                    return await self._activate_existing_hotspot()
                 return False
 
         except subprocess.TimeoutExpired:

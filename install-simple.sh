@@ -77,7 +77,7 @@ cat > /etc/ossuary/config.json << 'EOF'
   },
   "network": {
     "ap_ssid": "ossuary-setup",
-    "ap_passphrase": null,
+    "ap_passphrase": "ossuarypi",
     "ap_channel": 6,
     "ap_ip": "192.168.42.1",
     "ap_subnet": "192.168.42.0/24",

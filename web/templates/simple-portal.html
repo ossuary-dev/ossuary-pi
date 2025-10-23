@@ -165,7 +165,7 @@
             showStatus('Scanning for networks...', 'loading');
 
             try {
-                const response = await fetch('/api/network/scan', {
+                const response = await fetch('/api/v1/network/scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({})
@@ -226,7 +226,7 @@
 
             try {
                 // Connect to network
-                const connectResponse = await fetch('/api/network/connect', {
+                const connectResponse = await fetch('/api/v1/network/connect', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -241,7 +241,7 @@
                     // Update kiosk URL if provided
                     if (kioskUrl) {
                         try {
-                            await fetch('/api/kiosk/config', {
+                            await fetch('/api/v1/kiosk/config', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ url: kioskUrl })
