@@ -209,9 +209,18 @@ if [ "$SKIP_NETWORK_RESTART" -eq 1 ]; then
 else
     # Normal installation - run their setup script as intended
     log "Running standard raspi-captive-portal setup..."
-    echo "y" | sudo python3 setup.py >> "$LOG_FILE" 2>&1 || {
-        warning "raspi-captive-portal setup had issues, continuing..."
-    }
+
+    # Run setup and capture result
+    if echo "y" | sudo python3 setup.py >> "$LOG_FILE" 2>&1; then
+        log "raspi-captive-portal setup completed successfully"
+    else
+        warning "raspi-captive-portal setup had issues. Recent log output:"
+        echo "----------------------------------------"
+        tail -20 "$LOG_FILE"
+        echo "----------------------------------------"
+        echo "Full log available at: $LOG_FILE"
+        warning "Continuing with installation despite errors..."
+    fi
 fi
 
 # Stop and disable their Node.js server
@@ -269,6 +278,7 @@ logger = logging.getLogger('ossuary-monitor')
 
 CHECK_INTERVAL = 30
 FAIL_THRESHOLD = 60
+FLASK_PID_FILE = '/var/run/ossuary-flask.pid'
 
 def check_internet():
     """Check internet connectivity"""
@@ -295,28 +305,56 @@ def check_wifi():
     except:
         return False
 
+def is_flask_running():
+    """Check if Flask app is running"""
+    try:
+        if os.path.exists(FLASK_PID_FILE):
+            with open(FLASK_PID_FILE, 'r') as f:
+                pid = int(f.read().strip())
+                # Check if process exists
+                os.kill(pid, 0)
+                return True
+    except:
+        pass
+    return False
+
+def start_flask():
+    """Start Flask web interface"""
+    if not is_flask_running():
+        logger.info("Starting Flask web interface...")
+        proc = subprocess.Popen([
+            '/opt/ossuary/venv/bin/python3',
+            '/opt/ossuary/web/app.py'
+        ])
+        with open(FLASK_PID_FILE, 'w') as f:
+            f.write(str(proc.pid))
+        logger.info(f"Flask started with PID {proc.pid}")
+
+def stop_flask():
+    """Stop Flask web interface"""
+    try:
+        if os.path.exists(FLASK_PID_FILE):
+            with open(FLASK_PID_FILE, 'r') as f:
+                pid = int(f.read().strip())
+                os.kill(pid, signal.SIGTERM)
+                os.remove(FLASK_PID_FILE)
+                logger.info("Flask stopped")
+    except:
+        subprocess.run(['pkill', '-f', 'app.py'], check=False)
+
 def start_ap():
     """Start access point mode"""
-    logger.info("Starting access point...")
+    logger.info("Starting access point mode...")
 
     # Start AP services
     subprocess.run(['systemctl', 'start', 'hostapd'], check=False)
     subprocess.run(['systemctl', 'start', 'dnsmasq'], check=False)
 
-    # Start our Flask app
-    subprocess.Popen([
-        '/opt/ossuary/venv/bin/python3',
-        '/opt/ossuary/web/app.py'
-    ])
-
     logger.info("Access point started")
 
 def stop_ap():
     """Stop access point mode"""
-    logger.info("Stopping access point...")
-
-    # Kill Flask app
-    subprocess.run(['pkill', '-f', 'app.py'], check=False)
+    logger.info("Stopping access point mode...")
 
     # Stop AP services
     subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
@@ -327,8 +365,22 @@ def stop_ap():
 
     logger.info("Access point stopped")
 
+def get_ip_address():
+    """Get current IP address"""
+    try:
+        result = subprocess.run(
+            ['hostname', '-I'],
+            capture_output=True,
+            text=True
+        )
+        ips = result.stdout.strip().split()
+        return ips[0] if ips else None
+    except:
+        return None
+
 def signal_handler(sig, frame):
     logger.info("Shutting down...")
+    stop_flask()
     stop_ap()
     sys.exit(0)
 
@@ -336,12 +388,27 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    logger.info("Monitor started")
+    logger.info("Ossuary Monitor started")
+
+    # Always start Flask web interface
+    start_flask()
+    time.sleep(2)  # Give Flask time to start
+
+    # Log access information
+    ip = get_ip_address()
+    if ip:
+        logger.info(f"Web interface available at http://{ip}:8080")
+    logger.info("Web interface always available at http://localhost:8080")
 
     ap_active = False
     fail_time = None
 
     while True:
+        # Ensure Flask stays running
+        if not is_flask_running():
+            logger.warning("Flask not running, restarting...")
+            start_flask()
+
         has_wifi = check_wifi()
         has_internet = check_internet() if has_wifi else False
 
@@ -350,6 +417,11 @@ def main():
             if ap_active:
                 stop_ap()
                 ap_active = False
+                # Log new IP after reconnection
+                time.sleep(5)
+                ip = get_ip_address()
+                if ip:
+                    logger.info(f"Connected to WiFi. Web interface at http://{ip}:8080")
         else:
             if fail_time is None:
                 fail_time = time.time()
@@ -358,6 +430,7 @@ def main():
             if time.time() - fail_time > FAIL_THRESHOLD and not ap_active:
                 start_ap()
                 ap_active = True
+                logger.info("AP mode active. Connect to 'Ossuary-Setup' and visit http://192.168.4.1:8080")
 
         time.sleep(CHECK_INTERVAL)
 
@@ -418,11 +491,21 @@ echo "==========================================="
 echo "    Installation Complete!"
 echo "==========================================="
 echo ""
-echo "Access Point SSID: Ossuary-Setup (open network)"
-echo "Configuration URL: http://192.168.4.1:8080"
+echo "Web Interface Access:"
+echo "  • When on WiFi: http://<pi-ip-address>:8080"
+echo "  • On the Pi itself: http://localhost:8080"
+echo "  • In AP mode: http://192.168.4.1:8080"
 echo ""
-echo "Status: systemctl status ossuary-monitor"
-echo "Logs: journalctl -fu ossuary-monitor"
+echo "To find your Pi's IP address: hostname -I"
+echo ""
+echo "Access Point (when WiFi fails):"
+echo "  • SSID: Ossuary-Setup (open network)"
+echo "  • URL: http://192.168.4.1:8080"
+echo ""
+echo "Commands:"
+echo "  • Status: systemctl status ossuary-monitor"
+echo "  • Logs: journalctl -fu ossuary-monitor"
+echo "  • IP Address: hostname -I"
 echo ""
 if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
     echo "==========================================="
