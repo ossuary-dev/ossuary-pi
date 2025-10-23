@@ -412,7 +412,7 @@ def main():
     fail_time = None
 
     while True:
-        # Ensure Flask stays running
+        # Always ensure Flask stays running
         if not is_flask_running():
             logger.warning("Flask not running, restarting...")
             start_flask()
@@ -421,12 +421,26 @@ def main():
         manual_ap_flag = '/tmp/ossuary_manual_ap'
         is_manual_ap = os.path.exists(manual_ap_flag)
 
-        # If in manual AP mode, don't interfere
         if is_manual_ap:
-            logger.debug("Manual AP mode active, skipping automatic management")
+            # During test mode: still monitor but don't take action
+            logger.debug("Manual TEST mode active - monitoring but not managing network")
+            has_wifi = check_wifi()
+            has_internet = check_internet() if has_wifi else False
+
+            # Log status but don't act on it
+            if not has_wifi:
+                logger.debug("TEST mode: WiFi is down (expected)")
+            elif not has_internet:
+                logger.debug("TEST mode: No internet (expected)")
+
+            # Keep track of time for when test mode ends
+            if not has_wifi and fail_time is None:
+                fail_time = time.time()
+
             time.sleep(CHECK_INTERVAL)
             continue
 
+        # Normal operation - manage network
         has_wifi = check_wifi()
         has_internet = check_internet() if has_wifi else False
 

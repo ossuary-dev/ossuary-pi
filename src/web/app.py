@@ -393,42 +393,48 @@ def toggle_ap_mode():
             # Not in manual test mode - start test AP mode
             logger.info("Starting TEST AP mode (disconnecting from WiFi temporarily)")
 
-            # Stop any existing AP first (in case of auto-failover)
-            if ap_active:
-                subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
-                subprocess.run(['systemctl', 'stop', 'dnsmasq'], check=False)
-
-            # FORCE WiFi to fully disconnect
-            logger.info("Force disconnecting WiFi for test mode")
-            subprocess.run(['wpa_cli', 'disconnect'], check=False)
-            subprocess.run(['wpa_cli', 'terminate'], check=False)
-            subprocess.run(['systemctl', 'stop', 'wpa_supplicant'], check=False)
-            subprocess.run(['ip', 'link', 'set', 'wlan0', 'down'], check=False)
-
-            # Wait for interface to be ready
-            import time
-            time.sleep(2)
-
-            # Bring interface back up for AP mode
-            subprocess.run(['ip', 'link', 'set', 'wlan0', 'up'], check=False)
-
-            # NOW start AP services
-            result_hostapd = subprocess.run(['systemctl', 'start', 'hostapd'],
-                                           capture_output=True, text=True)
-            result_dnsmasq = subprocess.run(['systemctl', 'start', 'dnsmasq'],
-                                           capture_output=True, text=True)
-
-            # Check if they actually started
-            if result_hostapd.returncode != 0:
-                logger.error(f"Failed to start hostapd: {result_hostapd.stderr}")
-            if result_dnsmasq.returncode != 0:
-                logger.error(f"Failed to start dnsmasq: {result_dnsmasq.stderr}")
-
-            # Create manual test flag
+            # CREATE FLAG FIRST to stop monitor from interfering
             manual_flag = '/tmp/ossuary_manual_ap'
             with open(manual_flag, 'w') as f:
                 import time
                 f.write(str(time.time()))
+            logger.info("Manual test flag set - monitor will pause")
+
+            # Give monitor a moment to see the flag
+            time.sleep(1)
+
+            # Stop any existing services
+            logger.info("Stopping all network services for clean test")
+            subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
+            subprocess.run(['systemctl', 'stop', 'dnsmasq'], check=False)
+            subprocess.run(['systemctl', 'stop', 'wpa_supplicant'], check=False)
+
+            # Force interface down and up for clean state
+            subprocess.run(['ip', 'addr', 'flush', 'dev', 'wlan0'], check=False)
+            subprocess.run(['ip', 'link', 'set', 'wlan0', 'down'], check=False)
+            time.sleep(1)
+            subprocess.run(['ip', 'link', 'set', 'wlan0', 'up'], check=False)
+            time.sleep(1)
+
+            # Configure static IP for AP mode
+            subprocess.run(['ip', 'addr', 'add', '192.168.4.1/24', 'dev', 'wlan0'], check=False)
+
+            # Start AP services
+            logger.info("Starting AP services for test mode")
+            result_hostapd = subprocess.run(['systemctl', 'start', 'hostapd'],
+                                           capture_output=True, text=True)
+
+            if result_hostapd.returncode != 0:
+                logger.error(f"Failed to start hostapd: {result_hostapd.stderr}")
+                # Try again with restart
+                subprocess.run(['systemctl', 'restart', 'hostapd'], check=False)
+
+            result_dnsmasq = subprocess.run(['systemctl', 'start', 'dnsmasq'],
+                                           capture_output=True, text=True)
+
+            if result_dnsmasq.returncode != 0:
+                logger.error(f"Failed to start dnsmasq: {result_dnsmasq.stderr}")
+                subprocess.run(['systemctl', 'restart', 'dnsmasq'], check=False)
 
             # Set up auto-restore after 30 minutes (safety)
             subprocess.run([
