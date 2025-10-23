@@ -255,6 +255,12 @@ mkdir -p "$CONFIG_DIR"
 # Copy our web interface
 cp -r "$REPO_DIR/src/web/"* "$INSTALL_DIR/web/"
 
+# Copy startup wrapper script if it exists
+if [ -f "$REPO_DIR/src/services/startup-wrapper.sh" ]; then
+    cp "$REPO_DIR/src/services/startup-wrapper.sh" "$INSTALL_DIR/services/"
+    chmod +x "$INSTALL_DIR/services/startup-wrapper.sh"
+fi
+
 # Note: monitor.py is created directly below, not copied
 
 # Update Flask app to use venv Python
@@ -447,8 +453,9 @@ log "Creating systemd service..."
 cat > /etc/systemd/system/ossuary-monitor.service << EOF
 [Unit]
 Description=Ossuary WiFi Monitor
-After=network.target
-Wants=network.target
+After=network-online.target
+Wants=network-online.target
+Before=ossuary-startup.service
 
 [Service]
 Type=simple
@@ -479,6 +486,9 @@ fi
 # Set permissions
 chown -R root:root "$INSTALL_DIR"
 chown -R root:root "$CONFIG_DIR"
+
+# Enable network-online target (needed for proper service ordering)
+systemctl enable systemd-networkd-wait-online.service 2>/dev/null || true
 
 # Enable service
 systemctl daemon-reload

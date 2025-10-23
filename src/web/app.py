@@ -294,19 +294,33 @@ def update_startup_service(command):
 
         service_content = f'''[Unit]
 Description=Ossuary User Startup Command
-After=multi-user.target network-online.target
+After=network-online.target ossuary-monitor.service
 Wants=network-online.target
+Requires=network-online.target
 
 [Service]
-Type=simple
+Type=exec
 User={default_user}
 WorkingDirectory={home_dir}
 Environment="HOME={home_dir}"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY={home_dir}/.Xauthority"
+# Wait for network connectivity and add startup delay
+ExecStartPre=/bin/bash -c 'until ping -c1 8.8.8.8 &>/dev/null; do echo "Waiting for network..."; sleep 5; done'
+ExecStartPre=/bin/bash -c 'echo "Waiting 10 seconds for system to stabilize..."; sleep 10'
 ExecStart=/bin/bash -c "{escaped_command}"
-Restart=always
+# Kill entire process group when stopping
+KillMode=control-group
+KillSignal=SIGTERM
+TimeoutStopSec=10
+SendSIGKILL=yes
+# Restart policy
+Restart=on-failure
 RestartSec=10
 StartLimitBurst=5
 StartLimitIntervalSec=60
+# Clean up any leftover processes
+ExecStopPost=/bin/bash -c "pkill -f '{escaped_command}' || true"
 StandardOutput=journal
 StandardError=journal
 
@@ -347,6 +361,70 @@ WantedBy=multi-user.target
             return False
 
 
+@app.route('/toggle_ap_mode', methods=['POST'])
+def toggle_ap_mode():
+    """Toggle AP mode manually"""
+    try:
+        # Check current AP status
+        ap_result = subprocess.run(['systemctl', 'is-active', 'hostapd'],
+                                 capture_output=True, text=True)
+        ap_active = ap_result.stdout.strip() == 'active'
+
+        if ap_active:
+            # Stop AP mode
+            logger.info("Manually stopping AP mode")
+            subprocess.run(['systemctl', 'stop', 'hostapd'], check=False)
+            subprocess.run(['systemctl', 'stop', 'dnsmasq'], check=False)
+            # Restart wpa_supplicant to reconnect to WiFi
+            subprocess.run(['systemctl', 'restart', 'wpa_supplicant'], check=False)
+            message = "AP mode stopped. Reconnecting to WiFi..."
+            new_state = False
+        else:
+            # Start AP mode
+            logger.info("Manually starting AP mode")
+            subprocess.run(['systemctl', 'stop', 'wpa_supplicant'], check=False)
+            subprocess.run(['systemctl', 'start', 'hostapd'], check=False)
+            subprocess.run(['systemctl', 'start', 'dnsmasq'], check=False)
+            message = "AP mode started. Connect to 'Ossuary-Setup'"
+            new_state = True
+
+        # Create a flag file to indicate manual AP mode
+        manual_flag = '/tmp/ossuary_manual_ap'
+        if new_state:
+            Path(manual_flag).touch()
+        else:
+            Path(manual_flag).unlink(missing_ok=True)
+
+        return jsonify({
+            'success': True,
+            'message': message,
+            'ap_active': new_state
+        })
+    except Exception as e:
+        logger.error(f"Error toggling AP mode: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/stop_startup', methods=['POST'])
+def stop_startup():
+    """Stop the startup command service"""
+    try:
+        # Stop the service
+        result = subprocess.run(['systemctl', 'stop', 'ossuary-startup.service'],
+                              capture_output=True, text=True)
+
+        if result.returncode == 0:
+            logger.info("Startup service stopped successfully")
+            return jsonify({'success': True, 'message': 'Startup service stopped'})
+        else:
+            logger.error(f"Failed to stop startup service: {result.stderr}")
+            return jsonify({'success': False, 'error': 'Failed to stop service'}), 500
+
+    except Exception as e:
+        logger.error(f"Error stopping startup service: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/status')
 def status():
     """Get system status"""
@@ -374,6 +452,15 @@ def status():
         status_info['startup_service'] = result.stdout.strip() == 'active'
     except:
         status_info['startup_service'] = False
+
+    # Check AP mode status
+    try:
+        result = subprocess.run(['systemctl', 'is-active', 'hostapd'], capture_output=True, text=True)
+        status_info['ap_mode'] = result.stdout.strip() == 'active'
+        status_info['manual_ap'] = Path('/tmp/ossuary_manual_ap').exists()
+    except:
+        status_info['ap_mode'] = False
+        status_info['manual_ap'] = False
 
     config = load_config()
     status_info['startup_command'] = config.get('startup_command', '')

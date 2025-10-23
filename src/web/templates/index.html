@@ -18,6 +18,10 @@
         <span class="status-label">Startup Service:</span>
         <span class="status-value" id="startup-status">Checking...</span>
     </div>
+    <div class="status-item">
+        <span class="status-label">AP Mode:</span>
+        <span class="status-value" id="ap-status">Checking...</span>
+    </div>
 </div>
 
 <div style="margin-top: 20px;">
@@ -29,6 +33,8 @@
 
 <div style="margin-top: 30px; text-align: center;">
     <button onclick="refreshStatus()">Refresh Status</button>
+    <button onclick="toggleAPMode()" id="ap-mode-btn" style="margin-left: 10px;">Start AP Mode</button>
+    <button onclick="stopStartupCommand()" id="stop-cmd-btn" style="margin-left: 10px;">Stop Command</button>
 </div>
 {% endblock %}
 
@@ -76,8 +82,89 @@
             const startupCommand = document.getElementById('startup-command');
             startupCommand.textContent = data.startup_command || 'Not configured';
 
+            // Update AP mode status
+            const apStatus = document.getElementById('ap-status');
+            const apBtn = document.getElementById('ap-mode-btn');
+            if (data.ap_mode) {
+                apStatus.textContent = data.manual_ap ? 'Active (Manual)' : 'Active (Auto)';
+                apStatus.className = 'status-value connected';
+                apBtn.textContent = 'Stop AP Mode';
+            } else {
+                apStatus.textContent = 'Inactive';
+                apStatus.className = 'status-value';
+                apBtn.textContent = 'Start AP Mode';
+            }
+
+            // Update stop button visibility
+            const stopBtn = document.getElementById('stop-cmd-btn');
+            stopBtn.style.display = data.startup_service ? 'inline-block' : 'none';
+
         } catch (error) {
             console.error('Failed to refresh status:', error);
+        }
+    }
+
+    async function toggleAPMode() {
+        if (!confirm('Toggle Access Point mode? (WiFi settings will be preserved)')) {
+            return;
+        }
+
+        try {
+            const btn = document.getElementById('ap-mode-btn');
+            btn.disabled = true;
+            btn.textContent = 'Working...';
+
+            const response = await fetch('/toggle_ap_mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                showMessage(data.message, 'success');
+                // Update button text based on new state
+                btn.textContent = data.ap_active ? 'Stop AP Mode' : 'Start AP Mode';
+            } else {
+                showMessage(data.error || 'Failed to toggle AP mode', 'error');
+            }
+        } catch (error) {
+            console.error('Failed to toggle AP mode:', error);
+            showMessage('Failed to toggle AP mode', 'error');
+        } finally {
+            document.getElementById('ap-mode-btn').disabled = false;
+            refreshStatus();
+        }
+    }
+
+    async function stopStartupCommand() {
+        if (!confirm('Stop the startup command service?')) {
+            return;
+        }
+
+        try {
+            const btn = document.getElementById('stop-cmd-btn');
+            btn.disabled = true;
+            btn.textContent = 'Stopping...';
+
+            const response = await fetch('/stop_startup', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+
+            const data = await response.json();
+
+            if (data.success) {
+                showMessage('Startup command stopped', 'success');
+            } else {
+                showMessage(data.error || 'Failed to stop command', 'error');
+            }
+        } catch (error) {
+            console.error('Failed to stop command:', error);
+            showMessage('Failed to stop command', 'error');
+        } finally {
+            document.getElementById('stop-cmd-btn').disabled = false;
+            refreshStatus();
         }
     }
 
