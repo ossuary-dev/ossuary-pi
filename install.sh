@@ -158,15 +158,15 @@ EOF
 
 chmod +x "$REPO_DIR/captive-portal/access-point/iptables-rules-dhcpcd.sh"
 
-# Run raspi-captive-portal setup
-log "Running raspi-captive-portal setup..."
+# Run raspi-captive-portal setup (only the access point part, not Node.js)
+log "Running raspi-captive-portal access point setup..."
 cd "$REPO_DIR/captive-portal"
 
 # Handle SSH safety for raspi-captive-portal setup
 if [ "$SKIP_NETWORK_RESTART" -eq 1 ]; then
     log "SSH session detected - using safe installation method"
 
-    # Instead of modifying their script, we'll run the critical parts manually
+    # Run the critical parts manually
     log "Running captive portal setup in SSH-safe mode..."
 
     # 1. Install required packages (safe)
@@ -190,31 +190,33 @@ if [ "$SKIP_NETWORK_RESTART" -eq 1 ]; then
     cp ./access-point/hostapd.conf /etc/hostapd/hostapd.conf
 
     # 6. Set up IP forwarding (safe)
-    sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/g' /etc/sysctl.conf
+    if [ -f /etc/sysctl.conf ]; then
+        sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/g' /etc/sysctl.conf
+    else
+        echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ossuary.conf
+    fi
 
-    # 7. Configure iptables (safe)
-    iptables -t nat -I PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:8080
-    iptables -t nat -I PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.4.1:8080
+    # 7. Configure iptables - redirect port 80 to 3000 for Flask
+    iptables -t nat -I PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:3000
     netfilter-persistent save >> "$LOG_FILE" 2>&1
 
     # 8. Enable services but don't start them
     systemctl unmask dnsmasq hostapd
     systemctl enable dnsmasq hostapd
 
-    # 9. Run their server setup (should be safe)
-    cd "$REPO_DIR/captive-portal"
-    bash ./access-point/setup-server.sh >> "$LOG_FILE" 2>&1 || true
-
     warning "Network services configured but not started - reboot required"
 else
-    # Normal installation - run their setup script as intended
-    log "Running standard raspi-captive-portal setup..."
+    # Normal installation - run only the access point setup part
+    log "Running standard raspi-captive-portal access point setup..."
 
-    # Run setup and capture result
-    if echo "y" | sudo python3 setup.py >> "$LOG_FILE" 2>&1; then
-        log "raspi-captive-portal setup completed successfully"
+    # Make sure the setup script is executable
+    chmod +x ./access-point/setup-access-point.sh >> "$LOG_FILE" 2>&1
+
+    # Run just the access point setup (skip Node.js parts)
+    if bash ./access-point/setup-access-point.sh >> "$LOG_FILE" 2>&1; then
+        log "raspi-captive-portal access point setup completed successfully"
     else
-        warning "raspi-captive-portal setup had issues. Recent log output:"
+        warning "Access point setup had issues. Recent log output:"
         echo "----------------------------------------"
         tail -20 "$LOG_FILE"
         echo "----------------------------------------"
@@ -223,20 +225,12 @@ else
     fi
 fi
 
-# Stop and disable their Node.js server
+# Stop and disable their Node.js server (if it exists)
 log "Disabling default captive portal server..."
 systemctl stop access-point-server 2>/dev/null || true
 systemctl disable access-point-server 2>/dev/null || true
 
-# Fix iptables to redirect to our Flask app on 8080 instead of their Node.js on 3000
-log "Updating iptables for Flask app..."
-if [ "$SKIP_NETWORK_RESTART" -eq 0 ]; then
-    # Only do this if we ran their full setup
-    iptables -t nat -D PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:3000 2>/dev/null || true
-    iptables -t nat -I PREROUTING -p tcp --dport 80 -j DNAT --to-destination 192.168.4.1:8080
-    iptables -t nat -I PREROUTING -p tcp --dport 443 -j DNAT --to-destination 192.168.4.1:8080
-    netfilter-persistent save >> "$LOG_FILE" 2>&1
-fi
+# Note: We keep their iptables redirect (80->3000) since Flask now runs on port 3000
 
 # Create Python virtual environment for our code
 log "Setting up Python environment..."
@@ -397,8 +391,8 @@ def main():
     # Log access information
     ip = get_ip_address()
     if ip:
-        logger.info(f"Web interface available at http://{ip}:8080")
-    logger.info("Web interface always available at http://localhost:8080")
+        logger.info(f"Web interface available at http://{ip}")
+    logger.info("Direct Flask access at http://localhost:3000")
 
     ap_active = False
     fail_time = None
@@ -421,7 +415,7 @@ def main():
                 time.sleep(5)
                 ip = get_ip_address()
                 if ip:
-                    logger.info(f"Connected to WiFi. Web interface at http://{ip}:8080")
+                    logger.info(f"Connected to WiFi. Web interface at http://{ip}")
         else:
             if fail_time is None:
                 fail_time = time.time()
@@ -430,7 +424,7 @@ def main():
             if time.time() - fail_time > FAIL_THRESHOLD and not ap_active:
                 start_ap()
                 ap_active = True
-                logger.info("AP mode active. Connect to 'Ossuary-Setup' and visit http://192.168.4.1:8080")
+                logger.info("AP mode active. Connect to 'Ossuary-Setup' and visit http://192.168.4.1")
 
         time.sleep(CHECK_INTERVAL)
 
@@ -492,15 +486,15 @@ echo "    Installation Complete!"
 echo "==========================================="
 echo ""
 echo "Web Interface Access:"
-echo "  • When on WiFi: http://<pi-ip-address>:8080"
-echo "  • On the Pi itself: http://localhost:8080"
-echo "  • In AP mode: http://192.168.4.1:8080"
+echo "  • When on WiFi: http://<pi-ip-address>"
+echo "  • In AP mode: http://192.168.4.1"
+echo "  • Direct Flask: http://localhost:3000"
 echo ""
 echo "To find your Pi's IP address: hostname -I"
 echo ""
 echo "Access Point (when WiFi fails):"
 echo "  • SSID: Ossuary-Setup (open network)"
-echo "  • URL: http://192.168.4.1:8080"
+echo "  • URL: http://192.168.4.1"
 echo ""
 echo "Commands:"
 echo "  • Status: systemctl status ossuary-monitor"

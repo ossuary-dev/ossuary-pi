@@ -340,4 +340,5 @@ def status():
 
 if __name__ == '__main__':
     # Ensure we bind to all interfaces for AP mode access
-    app.run(host='0.0.0.0', port=8080, debug=False, threaded=True)
+    # Port 3000 to match raspi-captive-portal's iptables redirect (80->3000)
+    app.run(host='0.0.0.0', port=3000, debug=False, threaded=True)

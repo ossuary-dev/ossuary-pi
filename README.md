@@ -46,7 +46,7 @@ sudo ./test.sh
 
 When in AP mode:
 - SSID: `Ossuary-Setup` (open network)
-- URL: `http://192.168.4.1:8080`
+- URL: `http://192.168.4.1` (redirected from port 80 to Flask on 3000)
 
 Features:
 - Scan for WiFi networks

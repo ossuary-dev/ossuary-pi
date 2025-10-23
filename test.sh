@@ -121,12 +121,14 @@ else
 fi
 
 # Check if web interface is accessible
-if curl -s -f http://localhost:8080 &>/dev/null; then
-    pass "Web interface responding"
-elif curl -s -f http://192.168.4.1:8080 &>/dev/null; then
+if curl -s -f http://localhost:3000 &>/dev/null; then
+    pass "Flask responding on port 3000"
+elif curl -s -f http://localhost &>/dev/null; then
+    pass "Web interface responding via iptables redirect"
+elif curl -s -f http://192.168.4.1 &>/dev/null; then
     pass "Web interface responding (AP mode)"
 else
-    warn "Web interface not responding (normal if not in AP mode)"
+    warn "Web interface not responding"
 fi
 
 echo ""
