@@ -171,6 +171,9 @@ class NetworkManager:
             # Check current state
             await self._update_network_state()
 
+            # Try to connect to known networks on startup (CRITICAL)
+            await self._attempt_startup_connection()
+
             self.logger.info(f"NetworkManager initialized successfully ({'sdbus' if self.use_sdbus else 'gi'})")
 
         except Exception as e:
@@ -554,6 +557,58 @@ class NetworkManager:
             except Exception as fallback_error:
                 self.logger.error(f"Even AP fallback failed: {fallback_error}")
             return False
+
+    async def _attempt_startup_connection(self) -> None:
+        """Try to connect to known networks on startup (CRITICAL MISSING LOGIC)."""
+        try:
+            # Skip if already connected
+            if self.current_state == NetworkState.CONNECTED:
+                self.logger.info("Already connected, skipping startup connection attempt")
+                return
+
+            self.logger.info("Attempting startup connection to known networks")
+
+            # Get known networks sorted by priority/last used
+            known_networks = await self.get_known_networks()
+            if not known_networks:
+                self.logger.info("No known networks found, will start AP mode after timeout")
+                await self._start_fallback_timer()
+                return
+
+            # Try each known network in order
+            for network in sorted(known_networks, key=lambda x: x.get('last_used', ''), reverse=True):
+                ssid = network['ssid']
+                self.logger.info(f"Trying to connect to known network: {ssid}")
+
+                try:
+                    # Quick connection attempt (15s timeout)
+                    success = await asyncio.wait_for(
+                        self.connect_to_network(ssid, None),  # Password stored in NetworkManager
+                        timeout=15.0
+                    )
+
+                    if success:
+                        self.logger.info(f"Successfully connected to {ssid} on startup")
+                        return
+                    else:
+                        self.logger.warning(f"Failed to connect to {ssid}, trying next network")
+
+                except asyncio.TimeoutError:
+                    self.logger.warning(f"Connection to {ssid} timed out, trying next network")
+                except Exception as e:
+                    self.logger.warning(f"Error connecting to {ssid}: {e}, trying next network")
+
+                # Brief pause between attempts
+                await asyncio.sleep(2)
+
+            # No known networks worked - start fallback timer
+            self.logger.info("No known networks available, starting fallback timer")
+            await self._start_fallback_timer()
+
+        except Exception as e:
+            self.logger.error(f"Startup connection attempt failed: {e}")
+            # Still start fallback timer
+            await self._start_fallback_timer()
 
     def _create_connection(self, ssid: str, password: Optional[str] = None) -> NM.Connection:
         """Create a new WiFi connection."""

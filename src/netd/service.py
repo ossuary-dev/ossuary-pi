@@ -77,11 +77,43 @@ class NetworkService:
             self.logger.info("No network connection, starting access point")
             await self.network_manager.start_access_point()
 
-        # Main event loop
+        # Main event loop with active reconnection logic
+        reconnect_attempt = 0
+        last_reconnect_time = 0
+
         while self.running:
             try:
-                # Periodic status update
-                await self.network_manager.get_status()
+                # Get current status
+                status = await self.network_manager.get_status()
+                current_time = asyncio.get_event_loop().time()
+
+                # Active reconnection logic (CRITICAL IMPROVEMENT)
+                if (status.state == NetworkState.DISCONNECTED and
+                    not status.ap_active and
+                    current_time - last_reconnect_time > 30):  # Try every 30s
+
+                    reconnect_attempt += 1
+                    self.logger.info(f"Attempting reconnection #{reconnect_attempt}")
+
+                    # Try to reconnect to known networks
+                    try:
+                        await self.network_manager._attempt_startup_connection()
+                        last_reconnect_time = current_time
+
+                        # Reset counter on any attempt
+                        if reconnect_attempt >= 5:  # Give up after 5 attempts (2.5 minutes)
+                            self.logger.warning("Max reconnection attempts reached, letting fallback timer handle")
+                            reconnect_attempt = 0
+                            last_reconnect_time = current_time + 120  # Don't try again for 2 minutes
+
+                    except Exception as e:
+                        self.logger.error(f"Reconnection attempt failed: {e}")
+
+                # Reset attempt counter if connected
+                elif status.state == NetworkState.CONNECTED:
+                    reconnect_attempt = 0
+                    last_reconnect_time = 0
+
                 await asyncio.sleep(10)
 
             except asyncio.CancelledError:

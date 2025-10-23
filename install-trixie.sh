@@ -109,7 +109,7 @@ cat > /etc/ossuary/config.json << 'EOF'
     "ap_ip": "192.168.42.1",
     "ap_subnet": "192.168.42.0/24",
     "connection_timeout": 30,
-    "fallback_timeout": 120
+    "fallback_timeout": 60
   },
   "kiosk": {
     "url": "http://localhost:80",
