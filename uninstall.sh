@@ -88,8 +88,27 @@ iptables -D FORWARD -i wlan0 -o eth0 -j ACCEPT 2>/dev/null || true
 # Save cleaned iptables
 iptables-save > /etc/iptables.ipv4.nat
 
-# Remove IP forwarding if it was added by us
-sed -i '/^net.ipv4.ip_forward=1$/d' /etc/sysctl.conf 2>/dev/null || true
+# Remove IP forwarding configuration
+if [ -f /etc/sysctl.d/99-ossuary.conf ]; then
+    rm -f /etc/sysctl.d/99-ossuary.conf
+    sysctl --system > /dev/null 2>&1 || true
+elif [ -f /etc/sysctl.conf ]; then
+    sed -i '/^net.ipv4.ip_forward=1$/d' /etc/sysctl.conf 2>/dev/null || true
+fi
+
+# Remove iptables persistence service
+if [ -f /etc/systemd/system/ossuary-iptables.service ]; then
+    systemctl stop ossuary-iptables.service 2>/dev/null || true
+    systemctl disable ossuary-iptables.service 2>/dev/null || true
+    rm -f /etc/systemd/system/ossuary-iptables.service
+fi
+
+# Remove saved iptables rules
+rm -f /etc/iptables/rules.v4
+
+# Remove NetworkManager configuration if exists
+rm -f /etc/NetworkManager/conf.d/99-ossuary.conf
+systemctl reload NetworkManager 2>/dev/null || true
 
 echo "Restarting network services..."
 

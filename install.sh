@@ -213,13 +213,51 @@ log "Backing up network configurations..."
 [ -f /etc/dnsmasq.conf ] && cp /etc/dnsmasq.conf /etc/dnsmasq.conf.ossuary-backup
 [ -f /etc/hostapd/hostapd.conf ] && cp /etc/hostapd/hostapd.conf /etc/hostapd/hostapd.conf.ossuary-backup
 
+# Check which network manager is in use
+log "Detecting network management system..."
+NETWORK_MANAGER=""
+
+if systemctl is-active --quiet NetworkManager; then
+    NETWORK_MANAGER="NetworkManager"
+    log "NetworkManager detected"
+elif systemctl is-active --quiet dhcpcd; then
+    NETWORK_MANAGER="dhcpcd"
+    log "dhcpcd detected"
+else
+    NETWORK_MANAGER="dhcpcd"  # Default to dhcpcd
+    log "No active network manager detected, defaulting to dhcpcd configuration"
+fi
+
 # Configure network interfaces for AP mode
 log "Configuring network interfaces..."
-cat > /etc/dhcpcd.conf << EOF
+
+if [ "$NETWORK_MANAGER" = "NetworkManager" ]; then
+    # For NetworkManager, we need to tell it to ignore wlan0 when in AP mode
+    log "Configuring NetworkManager to ignore wlan0 in AP mode..."
+    cat > /etc/NetworkManager/conf.d/99-ossuary.conf << EOF
+[keyfile]
+unmanaged-devices=interface-name:wlan0
+EOF
+    systemctl reload NetworkManager >> "$LOG_FILE" 2>&1 || true
+fi
+
+# Configure dhcpcd (even if using NetworkManager, as fallback)
+if [ -f /etc/dhcpcd.conf ] || [ "$NETWORK_MANAGER" = "dhcpcd" ]; then
+    log "Configuring dhcpcd..."
+    # Append to existing dhcpcd.conf or create new one
+    if [ -f /etc/dhcpcd.conf ]; then
+        # Remove any existing wlan0 configuration
+        sed -i '/^interface wlan0/,/^$/d' /etc/dhcpcd.conf 2>/dev/null || true
+    fi
+
+    cat >> /etc/dhcpcd.conf << EOF
+
+# Ossuary AP mode configuration
 interface wlan0
     nohook wpa_supplicant
     static ip_address=192.168.4.1/24
 EOF
+fi
 
 # Configure dnsmasq for DHCP
 echo "Configuring dnsmasq..."
@@ -246,24 +284,54 @@ EOF
 
 # Enable IP forwarding
 log "Enabling IP forwarding..."
-if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
-    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+# Modern systems use /etc/sysctl.d/ for configuration
+if [ -d /etc/sysctl.d ]; then
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-ossuary.conf
+    sysctl --system >> "$LOG_FILE" 2>&1
+elif [ -f /etc/sysctl.conf ]; then
+    if ! grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf; then
+        echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+    fi
+    sysctl -p >> "$LOG_FILE" 2>&1
+else
+    # Create sysctl.conf if it doesn't exist
+    echo "net.ipv4.ip_forward=1" > /etc/sysctl.conf
+    sysctl -p >> "$LOG_FILE" 2>&1
 fi
-sysctl -p >> "$LOG_FILE" 2>&1
+
+# Enable immediately
+echo 1 > /proc/sys/net/ipv4/ip_forward
 
 # Configure iptables for NAT
-echo "Configuring iptables..."
+log "Configuring iptables..."
 iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 iptables -A FORWARD -i eth0 -o wlan0 -m state --state RELATED,ESTABLISHED -j ACCEPT
 iptables -A FORWARD -i wlan0 -o eth0 -j ACCEPT
 
 # Save iptables rules
-iptables-save > /etc/iptables.ipv4.nat
+mkdir -p /etc/iptables
+iptables-save > /etc/iptables/rules.v4
 
-# Add iptables restore to rc.local
-if ! grep -q "iptables-restore" /etc/rc.local; then
-    sed -i 's/^exit 0/iptables-restore < \/etc\/iptables.ipv4.nat\nexit 0/' /etc/rc.local
-fi
+# Create systemd service for iptables persistence (modern approach)
+log "Creating iptables persistence service..."
+cat > /etc/systemd/system/ossuary-iptables.service << 'EOF'
+[Unit]
+Description=Ossuary IPTables Rules
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/iptables-restore /etc/iptables/rules.v4
+ExecReload=/sbin/iptables-restore /etc/iptables/rules.v4
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable ossuary-iptables.service >> "$LOG_FILE" 2>&1
 
 # Reload systemd
 log "Reloading systemd..."
