@@ -206,15 +206,19 @@ if [ "$SKIP_NETWORK_RESTART" -eq 1 ]; then
 
     warning "Network services configured but not started - reboot required"
 else
-    # Normal installation - run only the access point setup part
-    log "Running standard raspi-captive-portal access point setup..."
+    # Normal installation - we need to prevent dhcpcd restart from killing our script
+    log "Running raspi-captive-portal access point setup (modified for safety)..."
 
-    # Make sure the setup script is executable
-    chmod +x ./access-point/setup-access-point.sh >> "$LOG_FILE" 2>&1
+    # Create a modified version of their setup script that doesn't restart dhcpcd
+    cp ./access-point/setup-access-point.sh ./access-point/setup-access-point-safe.sh
+    sed -i 's/sudo systemctl restart dhcpcd/# sudo systemctl restart dhcpcd # Skipped for installation safety/' ./access-point/setup-access-point-safe.sh
+    chmod +x ./access-point/setup-access-point-safe.sh >> "$LOG_FILE" 2>&1
 
-    # Run just the access point setup (skip Node.js parts)
-    if bash ./access-point/setup-access-point.sh >> "$LOG_FILE" 2>&1; then
+    # Run the modified setup script
+    if bash ./access-point/setup-access-point-safe.sh >> "$LOG_FILE" 2>&1; then
         log "raspi-captive-portal access point setup completed successfully"
+        # Mark that dhcpcd needs restart later
+        NEEDS_DHCPCD_RESTART=1
     else
         warning "Access point setup had issues. Recent log output:"
         echo "----------------------------------------"
@@ -222,7 +226,11 @@ else
         echo "----------------------------------------"
         echo "Full log available at: $LOG_FILE"
         warning "Continuing with installation despite errors..."
+        NEEDS_DHCPCD_RESTART=1
     fi
+
+    # Clean up temporary file
+    rm -f ./access-point/setup-access-point-safe.sh
 fi
 
 # Stop and disable their Node.js server (if it exists)
@@ -455,14 +463,18 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-# Create default config
-log "Creating configuration..."
-cat > "$CONFIG_DIR/config.json" << EOF
+# Create default config (only if it doesn't exist)
+if [ ! -f "$CONFIG_DIR/config.json" ]; then
+    log "Creating default configuration..."
+    cat > "$CONFIG_DIR/config.json" << EOF
 {
   "startup_command": "",
   "wifi_networks": []
 }
 EOF
+else
+    log "Preserving existing configuration..."
+fi
 
 # Set permissions
 chown -R root:root "$INSTALL_DIR"
@@ -471,6 +483,17 @@ chown -R root:root "$CONFIG_DIR"
 # Enable service
 systemctl daemon-reload
 systemctl enable ossuary-monitor.service
+
+# Handle dhcpcd restart if needed (do this AFTER everything else is installed)
+if [ "${NEEDS_DHCPCD_RESTART:-0}" -eq 1 ]; then
+    if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
+        warning "dhcpcd needs to be restarted but you're on SSH"
+        warning "The system will work after reboot, or run: sudo systemctl restart dhcpcd"
+    else
+        log "Restarting dhcpcd to apply network configuration..."
+        systemctl restart dhcpcd
+    fi
+fi
 
 # Start if not over SSH
 if [ -z "$SSH_CLIENT" ] && [ -z "$SSH_TTY" ]; then

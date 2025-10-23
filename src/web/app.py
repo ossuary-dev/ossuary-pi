@@ -7,6 +7,7 @@ import os
 import re
 import logging
 import sys
+import pwd
 from pathlib import Path
 from werkzeug.serving import run_simple
 
@@ -247,12 +248,27 @@ def set_startup_command():
         config = load_config()
         config['startup_command'] = command
 
-        if save_config(config):
-            # Update the systemd service with new command
-            update_startup_service(command)
-            return jsonify({'success': True, 'message': 'Startup command updated'})
-        else:
+        if not save_config(config):
             return jsonify({'success': False, 'error': 'Failed to save configuration'}), 500
+
+        # Update the systemd service with new command
+        if update_startup_service(command):
+            # Check if service actually started
+            import time
+            time.sleep(1)  # Give service time to start
+            result = subprocess.run(['systemctl', 'is-active', 'ossuary-startup.service'],
+                                  capture_output=True, text=True)
+            if result.stdout.strip() == 'active':
+                return jsonify({'success': True, 'message': 'Startup command updated and running'})
+            else:
+                # Get status for debugging
+                status_result = subprocess.run(['systemctl', 'status', 'ossuary-startup.service', '--no-pager', '-n', '5'],
+                                             capture_output=True, text=True)
+                logger.error(f"Service failed to start: {status_result.stdout}")
+                return jsonify({'success': True, 'message': 'Command saved but service failed to start. Check logs.',
+                              'warning': True})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to update systemd service'}), 500
     except Exception as e:
         logger.error(f"Error setting startup command: {e}")
         return jsonify({'success': False, 'error': 'Internal error'}), 500
@@ -263,24 +279,39 @@ def update_startup_service(command):
     service_file = '/etc/systemd/system/ossuary-startup.service'
 
     if command:
+        # Get the default non-root user (first user with UID >= 1000)
+        try:
+            import pwd
+            users = [u.pw_name for u in pwd.getpwall() if u.pw_uid >= 1000 and u.pw_uid < 65534]
+            default_user = users[0] if users else 'pi'
+            home_dir = pwd.getpwnam(default_user).pw_dir
+        except:
+            default_user = 'pi'  # fallback
+            home_dir = '/home/pi'
+
+        # Escape command for systemd
+        escaped_command = command.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$')
+
         service_content = f'''[Unit]
 Description=Ossuary User Startup Command
-After=multi-user.target graphical.target network-online.target
+After=multi-user.target network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-Environment="DISPLAY=:0"
-Environment="HOME=/home/pi"
-ExecStart=/bin/bash -c '{command}'
+User={default_user}
+WorkingDirectory={home_dir}
+Environment="HOME={home_dir}"
+ExecStart=/bin/bash -c "{escaped_command}"
 Restart=always
-RestartSec=5
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=60
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 '''
 
         try:
@@ -288,20 +319,32 @@ WantedBy=default.target
                 f.write(service_content)
 
             # Reload systemd and enable service
-            subprocess.run(['systemctl', 'daemon-reload'], check=True)
-            subprocess.run(['systemctl', 'enable', 'ossuary-startup.service'], check=True)
-            subprocess.run(['systemctl', 'restart', 'ossuary-startup.service'], check=True)
+            subprocess.run(['systemctl', 'daemon-reload'], check=True, timeout=10)
+            subprocess.run(['systemctl', 'enable', 'ossuary-startup.service'], check=True, timeout=10)
+            subprocess.run(['systemctl', 'restart', 'ossuary-startup.service'], check=True, timeout=10)
 
-        except Exception as e:
+            logger.info(f"Startup service updated with command: {command}")
+            return True
+
+        except subprocess.CalledProcessError as e:
             logger.error(f"Failed to update startup service: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error updating startup service: {e}")
+            return False
 
     else:
         # Disable service if no command
         try:
-            subprocess.run(['systemctl', 'stop', 'ossuary-startup.service'])
-            subprocess.run(['systemctl', 'disable', 'ossuary-startup.service'])
-        except:
-            pass
+            subprocess.run(['systemctl', 'stop', 'ossuary-startup.service'], check=False, timeout=10)
+            subprocess.run(['systemctl', 'disable', 'ossuary-startup.service'], check=False, timeout=10)
+            if os.path.exists(service_file):
+                os.remove(service_file)
+            logger.info("Startup service disabled")
+            return True
+        except Exception as e:
+            logger.error(f"Error disabling startup service: {e}")
+            return False
 
 
 @app.route('/status')
