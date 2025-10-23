@@ -1729,10 +1729,15 @@ EOF
     done
 
     if [[ -n "$post_install_script" ]]; then
-        cp "$post_install_script" /opt/ossuary/post-install.sh || {
-            print_error "Failed to copy post-install script"
-            return 1
-        }
+        # Only copy if source and destination are different
+        if [[ "$post_install_script" != "/opt/ossuary/post-install.sh" ]]; then
+            cp "$post_install_script" /opt/ossuary/post-install.sh || {
+                print_error "Failed to copy post-install script"
+                return 1
+            }
+        else
+            print_step "Post-install script already in place"
+        fi
     else
         print_warning "post-install.sh not found - creating basic version"
         # Create a minimal post-install script

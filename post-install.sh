@@ -43,9 +43,10 @@ check_if_dns_needed() {
         return 1  # Not needed
     fi
 
-    # Check if we're on a desktop system (probably doesn't need captive portal)
-    if systemctl is-active --quiet graphical.target && pgrep -f "lightdm|gdm|sddm|lxdm" > /dev/null; then
-        log "Desktop environment detected - DNS captive portal config not needed"
+    # Desktop systems can still use captive portal - it's a core feature
+    # Only skip if explicitly disabled via environment variable
+    if [[ "${OSSUARY_SKIP_DNS_CONFIG}" == "1" ]]; then
+        log "DNS configuration explicitly skipped via OSSUARY_SKIP_DNS_CONFIG"
         return 1  # Not needed
     fi
 
@@ -57,15 +58,27 @@ check_if_dns_needed() {
 configure_captive_portal_dns() {
     log "Configuring DNS for captive portal detection..."
 
+    # Check if systemd-resolved is in use (common on desktop systems)
+    if systemctl is-active --quiet systemd-resolved; then
+        log "systemd-resolved detected - configuring for compatibility"
+        # Disable DNS stub listener to avoid port 53 conflict
+        mkdir -p /etc/systemd/resolved.conf.d/
+        cat > /etc/systemd/resolved.conf.d/ossuary.conf << 'EOF'
+[Resolve]
+DNSStubListener=no
+EOF
+        systemctl restart systemd-resolved || true
+    fi
+
     # Create NetworkManager dispatcher script for DNS override
     cat > /etc/NetworkManager/dispatcher.d/99-ossuary-dns << 'EOF'
 #!/bin/bash
 # Ossuary DNS configuration for captive portal detection
 
-if [[ \"\$1\" == \"ossuary-ap\" && \"\$2\" == \"up\" ]]; then
+if [[ "$1" == "ossuary-ap" && "$2" == "up" ]]; then
     # Override DNS for captive portal
-    echo \"nameserver 192.168.42.1\" > /etc/resolv.conf
-    echo \"search ossuary.local\" >> /etc/resolv.conf
+    echo "nameserver 192.168.42.1" > /etc/resolv.conf
+    echo "search ossuary.local" >> /etc/resolv.conf
 
     # Ensure dnsmasq is configured for captive portal
     if [[ -f /etc/dnsmasq.d/ossuary-ap.conf ]]; then
@@ -82,13 +95,35 @@ EOF
     cat > /etc/dnsmasq.d/ossuary-ap.conf << 'EOF'
 # Ossuary AP mode DNS configuration
 interface=wlan0
+bind-interfaces
 dhcp-range=192.168.42.10,192.168.42.100,12h
 dhcp-option=option:router,192.168.42.1
 dhcp-option=option:dns-server,192.168.42.1
+
+# Local domain
 address=/ossuary.local/192.168.42.1
+address=/portal.ossuary.local/192.168.42.1
+
+# Captive portal detection URLs - redirect to our portal
+# Android
 address=/connectivitycheck.gstatic.com/192.168.42.1
 address=/clients3.google.com/192.168.42.1
+address=/play.googleapis.com/192.168.42.1
+# iOS/macOS
 address=/captive.apple.com/192.168.42.1
+address=/www.apple.com/192.168.42.1
+# Windows
+address=/www.msftconnecttest.com/192.168.42.1
+address=/www.msftncsi.com/192.168.42.1
+# Firefox
+address=/detectportal.firefox.com/192.168.42.1
+# General
+address=/example.com/192.168.42.1
+address=/neverssl.com/192.168.42.1
+
+# Log DNS queries for debugging (optional)
+# log-queries
+# log-facility=/var/log/dnsmasq.log
 EOF
 
     log "dnsmasq configuration created"
