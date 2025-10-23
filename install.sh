@@ -42,6 +42,24 @@ if [[ $EUID -ne 0 ]]; then
    exit 1
 fi
 
+# Check if we're running over SSH
+if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
+    warning "You appear to be installing over SSH"
+    echo ""
+    echo "NOTE: This installation modifies network settings but should NOT"
+    echo "disconnect your current SSH session. The WiFi monitor service"
+    echo "will only activate AP mode when WiFi is disconnected."
+    echo ""
+    echo "However, if you're connected via WiFi (not Ethernet), there is"
+    echo "a small risk of disconnection during network service restart."
+    echo ""
+    read -p "Continue with installation? (y/N): " -n 1 -r
+    echo ""
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
 # Check system requirements
 log "Checking system requirements..."
 
@@ -244,19 +262,27 @@ fi
 # Configure dhcpcd (even if using NetworkManager, as fallback)
 if [ -f /etc/dhcpcd.conf ] || [ "$NETWORK_MANAGER" = "dhcpcd" ]; then
     log "Configuring dhcpcd..."
+    # NOTE: The static IP configuration for wlan0 will only take effect
+    # when the captive portal service explicitly configures AP mode.
+    # Normal WiFi connections will continue to work through wpa_supplicant.
+
     # Append to existing dhcpcd.conf or create new one
     if [ -f /etc/dhcpcd.conf ]; then
-        # Remove any existing wlan0 configuration
-        sed -i '/^interface wlan0/,/^$/d' /etc/dhcpcd.conf 2>/dev/null || true
+        # Remove any existing Ossuary wlan0 configuration
+        sed -i '/^# Ossuary AP mode configuration/,/^$/d' /etc/dhcpcd.conf 2>/dev/null || true
     fi
 
+    # Add configuration but it won't activate until AP mode is triggered
     cat >> /etc/dhcpcd.conf << EOF
 
 # Ossuary AP mode configuration
-interface wlan0
-    nohook wpa_supplicant
-    static ip_address=192.168.4.1/24
+# This is only activated when captive portal starts
+#interface wlan0
+#    nohook wpa_supplicant
+#    static ip_address=192.168.4.1/24
 EOF
+
+    log "dhcpcd configuration prepared (commented out for safety)"
 fi
 
 # Configure dnsmasq for DHCP
@@ -344,9 +370,16 @@ systemctl enable ossuary-wifi-monitor.service >> "$LOG_FILE" 2>&1
 
 # Start services
 log "Starting services..."
-systemctl start ossuary-wifi-monitor.service >> "$LOG_FILE" 2>&1 || {
-    warning "Failed to start WiFi monitor service. Check logs with: journalctl -u ossuary-wifi-monitor"
-}
+
+# Check if we're on SSH before starting services that might affect network
+if [ -n "$SSH_CLIENT" ] || [ -n "$SSH_TTY" ]; then
+    warning "Services will start after reboot to preserve SSH connection"
+    log "Services configured to start on next boot"
+else
+    systemctl start ossuary-wifi-monitor.service >> "$LOG_FILE" 2>&1 || {
+        warning "Failed to start WiFi monitor service. Check logs with: journalctl -u ossuary-wifi-monitor"
+    }
+fi
 
 echo ""
 echo "==========================================="

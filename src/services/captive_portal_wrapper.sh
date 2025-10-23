@@ -9,10 +9,17 @@ WEB_DIR="/opt/ossuary/web"
 setup_ap() {
     echo "Setting up access point..."
 
+    # First, enable the dhcpcd static IP configuration if it exists
+    if [ -f /etc/dhcpcd.conf ]; then
+        # Uncomment the Ossuary AP configuration
+        sed -i '/^# Ossuary AP mode configuration/,/^$/{s/^#interface/interface/; s/^#    /    /}' /etc/dhcpcd.conf 2>/dev/null || true
+    fi
+
     # Stop any existing WiFi connections
     wpa_cli terminate 2>/dev/null || true
+    systemctl stop wpa_supplicant 2>/dev/null || true
 
-    # Configure the interface
+    # Configure the interface manually for immediate effect
     ip link set wlan0 down
     ip addr flush dev wlan0
     ip addr add 192.168.4.1/24 dev wlan0
@@ -35,6 +42,11 @@ setup_ap() {
 # Function to teardown access point
 teardown_ap() {
     echo "Stopping access point..."
+
+    # Re-comment the dhcpcd static IP configuration
+    if [ -f /etc/dhcpcd.conf ]; then
+        sed -i '/^# Ossuary AP mode configuration/,/^$/{s/^interface/#interface/; s/^    /#    /}' /etc/dhcpcd.conf 2>/dev/null || true
+    fi
 
     # Kill hostapd
     killall hostapd 2>/dev/null || true
