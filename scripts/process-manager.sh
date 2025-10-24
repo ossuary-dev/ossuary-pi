@@ -275,32 +275,32 @@ PID_FILE="${PID_FILE}.actual"
 # Run the command and save its PID
 if id "pi" &>/dev/null; then
     if [ "$is_gui_app" = true ]; then
-        exec su pi -c "export DISPLAY='${DISPLAY:-:0}'; \
+        su pi -c "export DISPLAY='${DISPLAY:-:0}'; \
             export XAUTHORITY='${XAUTHORITY}'; \
             export HOME='${HOME}'; \
             export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
             export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
             export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
             $extra_env \
-            exec $clean_command"
+            $clean_command & echo \\\$! > \$PID_FILE; wait \\\$!"
     else
-        exec su pi -c "$extra_env exec $clean_command"
+        su pi -c "$extra_env $clean_command & echo \\\$! > \$PID_FILE; wait \\\$!"
     fi
 else
     # Find first non-root user
     default_user=\$(getent passwd | awk -F: '\$3 >= 1000 && \$3 < 65534 {print \$1}' | head -1)
     if [ -n "\$default_user" ]; then
         if [ "$is_gui_app" = true ]; then
-            exec su "\$default_user" -c "export DISPLAY='${DISPLAY:-:0}'; \
+            su "\$default_user" -c "export DISPLAY='${DISPLAY:-:0}'; \
                 export XAUTHORITY='${XAUTHORITY}'; \
                 export HOME='${HOME}'; \
                 export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
                 export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
                 export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
                 $extra_env \
-                exec $clean_command"
+                $clean_command & echo \\\$! > \$PID_FILE; wait \\\$!"
         else
-            exec su "\$default_user" -c "$extra_env exec $clean_command"
+            su "\$default_user" -c "$extra_env $clean_command & echo \\\$! > \$PID_FILE; wait \\\$!"
         fi
     else
         # Fallback to running as current user
@@ -313,7 +313,7 @@ else
             export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'
             eval "$extra_env"
         fi
-        exec bash -c "$clean_command"
+        bash -c "$clean_command & echo \$! > \$PID_FILE; wait \$!"
     fi
 fi
 WRAPPER_EOF
@@ -416,13 +416,35 @@ stop_process() {
         rm -f "${PID_FILE}.child"
     fi
 
-    # Extra cleanup for GUI applications (common browser processes)
+    # Extra cleanup for any child processes that might have escaped the process group
+    # This is especially important for browsers like Chromium that spawn many processes
     if [ "$killed_something" = true ]; then
-        if command -v pkill >/dev/null; then
-            # Kill any lingering browser processes that might have been spawned
-            pkill -f "chromium.*kiosk" 2>/dev/null || true
-            pkill -f "firefox.*kiosk" 2>/dev/null || true
-            pkill -f "chrome.*kiosk" 2>/dev/null || true
+        # Function to recursively find all descendants of a PID
+        find_descendants() {
+            local pid=$1
+            local children=$(pgrep -P "$pid" 2>/dev/null)
+            echo "$children"
+            for child in $children; do
+                find_descendants "$child"
+            done
+        }
+
+        # Kill all descendant processes
+        if [ -f "${PID_FILE}.actual" ]; then
+            local actual_pid=$(cat "${PID_FILE}.actual" 2>/dev/null)
+            if [ -n "$actual_pid" ]; then
+                local all_descendants=$(find_descendants "$actual_pid" | tr '\n' ' ')
+                if [ -n "$all_descendants" ]; then
+                    log "Killing descendant processes: $all_descendants"
+                    for pid in $all_descendants; do
+                        kill -TERM "$pid" 2>/dev/null || true
+                    done
+                    sleep 1
+                    for pid in $all_descendants; do
+                        kill -KILL "$pid" 2>/dev/null || true
+                    done
+                fi
+            fi
         fi
         log "Process cleanup complete"
     else
