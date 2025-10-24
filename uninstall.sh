@@ -34,6 +34,10 @@ warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
+success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
 # Header
 clear
 echo "==========================================="
@@ -149,35 +153,17 @@ log "Cleaning up log files..."
 rm -f /var/log/ossuary*.log 2>/dev/null || true
 rm -f /tmp/ossuary*.log 2>/dev/null || true
 
-# Step 7: Network manager cleanup
-log "Checking network configuration..."
+# Step 7: Network status check
+log "Verifying network configuration..."
 
-# Ask about NetworkManager
-if command -v NetworkManager &> /dev/null; then
-    echo ""
-    echo "NetworkManager is currently managing your network."
-    echo -n "Do you want to re-enable dhcpcd instead? (yes/no): "
-    read -r use_dhcpcd
-
-    if [ "$use_dhcpcd" = "yes" ]; then
-        if command -v dhcpcd &> /dev/null; then
-            log "Re-enabling dhcpcd..."
-
-            # Stop NetworkManager
-            systemctl stop NetworkManager 2>/dev/null || true
-            systemctl disable NetworkManager 2>/dev/null || true
-
-            # Enable and start dhcpcd
-            systemctl enable dhcpcd 2>/dev/null || true
-
-            warning "dhcpcd enabled but not started (to preserve your connection)"
-            warning "You may need to reboot or manually start dhcpcd"
-        else
-            warning "dhcpcd not found. Please install it if needed: apt-get install dhcpcd5"
-        fi
-    else
-        log "Keeping NetworkManager as the network manager"
-    fi
+# NetworkManager is the standard in modern Pi OS
+if systemctl is-active --quiet NetworkManager; then
+    success "NetworkManager is active and managing your network"
+    echo "  This is the standard for Pi OS Bookworm (2023) and newer"
+else
+    warning "NetworkManager is not active"
+    echo "  To re-enable NetworkManager:"
+    echo "    sudo systemctl enable --now NetworkManager"
 fi
 
 # Step 8: Check for leftover processes
@@ -234,12 +220,13 @@ if [ $ISSUES -eq 0 ]; then
     echo ""
     echo "Network status:"
     if systemctl is-active --quiet NetworkManager; then
-        echo "  • NetworkManager is active"
-    elif systemctl is-active --quiet dhcpcd; then
-        echo "  • dhcpcd is active"
+        echo -e "  • NetworkManager is ${GREEN}active${NC}"
+        echo "    Your network configuration is intact"
     else
-        echo "  • No network manager is currently active"
-        echo "  • You may need to configure networking manually"
+        echo -e "  • ${RED}NetworkManager is not active!${NC}"
+        echo ""
+        echo "  To restore networking:"
+        echo "    sudo systemctl enable --now NetworkManager"
     fi
 
     echo ""

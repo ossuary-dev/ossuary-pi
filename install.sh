@@ -372,14 +372,7 @@ perform_installation() {
             success "NetworkManager is already running (default in Pi OS 2025)"
         fi
 
-        # dhcpcd is deprecated in Bookworm/Trixie but may still be present
-        if systemctl list-units --all | grep -q "dhcpcd.service"; then
-            if systemctl is-active --quiet dhcpcd; then
-                log "Disabling legacy dhcpcd service..."
-                systemctl stop dhcpcd >> "$LOG_FILE" 2>&1
-                systemctl disable dhcpcd >> "$LOG_FILE" 2>&1
-            fi
-        fi
+        # Note: We don't touch dhcpcd anymore - it's deprecated and causes issues
     fi
 
     # Step 2: Install/repair WiFi Connect
@@ -625,7 +618,7 @@ main() {
             echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo ""
             echo "This installation will:"
-            echo "  1. Disable dhcpcd and enable NetworkManager"
+            echo "  1. Ensure NetworkManager is running"
             echo "  2. Install WiFi Connect and dependencies"
             echo "  3. Configure services"
             echo -e "  4. ${YELLOW}REBOOT YOUR SYSTEM AUTOMATICALLY${NC}"
