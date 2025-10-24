@@ -34,14 +34,15 @@ except:
 
 # Function to detect display server type
 detect_display_server() {
-    # Check XDG_SESSION_TYPE first (most reliable)
+    # Check XDG_SESSION_TYPE first (most reliable on Pi OS 2025)
     if [ -n "$XDG_SESSION_TYPE" ]; then
-        echo "$XDG_SESSION_TYPE"
-        return
+        case "$XDG_SESSION_TYPE" in
+            "wayland"|"x11") echo "$XDG_SESSION_TYPE"; return ;;
+        esac
     fi
 
-    # Check for Wayland
-    if [ -n "$WAYLAND_DISPLAY" ]; then
+    # Check for Wayland (Pi OS 2025 uses Wayfire by default)
+    if [ -n "$WAYLAND_DISPLAY" ] || [ -n "$XDG_RUNTIME_DIR" ]; then
         echo "wayland"
         return
     fi
@@ -52,14 +53,26 @@ detect_display_server() {
         return
     fi
 
-    # Try to detect from running processes
+    # Try to detect from running processes (Pi OS 2025 specific)
     if pgrep -x "Xorg" > /dev/null || pgrep -x "X" > /dev/null; then
         echo "x11"
         return
     fi
 
-    if pgrep -x "sway" > /dev/null || pgrep -x "weston" > /dev/null || pgrep -x "wayfire" > /dev/null; then
+    # Pi OS 2025 Wayland compositors
+    if pgrep -x "wayfire" > /dev/null || pgrep -x "weston" > /dev/null || pgrep -x "sway" > /dev/null || pgrep -x "labwc" > /dev/null; then
         echo "wayland"
+        return
+    fi
+
+    # Check systemctl for display manager (modern approach)
+    if systemctl is-active --quiet gdm3 || systemctl is-active --quiet lightdm; then
+        # If display manager is running, likely has a display server
+        if [ -S "/run/user/$(id -u)/wayland-0" ] 2>/dev/null; then
+            echo "wayland"
+        else
+            echo "x11"
+        fi
         return
     fi
 
@@ -75,31 +88,45 @@ wait_for_display() {
     log "Detected display server: $display_type"
 
     while [ $waited -lt $max_wait ]; do
-        # For Wayland
+        # For Wayland (Pi OS 2025 default)
         if [ "$display_type" = "wayland" ]; then
-            if [ -n "$WAYLAND_DISPLAY" ] && [ -e "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
-                log "Wayland display is ready"
+            # Check for Wayland socket
+            if [ -n "$XDG_RUNTIME_DIR" ] && [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
+                log "Wayland display socket is ready"
                 return 0
             fi
-            # Also check if compositor is running
-            if pgrep -x "sway" > /dev/null || pgrep -x "weston" > /dev/null || pgrep -x "wayfire" > /dev/null; then
+            # Check if any Wayland compositor is running
+            if pgrep -x "wayfire" > /dev/null || pgrep -x "weston" > /dev/null || pgrep -x "sway" > /dev/null || pgrep -x "labwc" > /dev/null; then
                 log "Wayland compositor is running"
+                return 0
+            fi
+            # Check for WAYLAND_DISPLAY environment variable
+            if [ -n "$WAYLAND_DISPLAY" ]; then
+                log "WAYLAND_DISPLAY is set"
                 return 0
             fi
         # For X11
         elif [ "$display_type" = "x11" ] || [ "$display_type" = "unknown" ]; then
-            if xset q &>/dev/null 2>&1; then
-                log "X11 display is ready"
-                return 0
-            fi
-            # Alternative X11 check
-            if [ -n "$DISPLAY" ] && xdpyinfo &>/dev/null 2>&1; then
-                log "X11 display verified with xdpyinfo"
-                return 0
+            # Modern X11 check - test if we can connect to display
+            if [ -n "$DISPLAY" ]; then
+                # Use a simple X11 test that should work on most systems
+                if timeout 2 xwininfo -root &>/dev/null; then
+                    log "X11 display is ready"
+                    return 0
+                fi
+                # Fallback X11 checks
+                if command -v xset >/dev/null && timeout 2 xset q &>/dev/null; then
+                    log "X11 display ready (xset)"
+                    return 0
+                fi
+                if command -v xdpyinfo >/dev/null && timeout 2 xdpyinfo &>/dev/null; then
+                    log "X11 display ready (xdpyinfo)"
+                    return 0
+                fi
             fi
         fi
 
-        log "Waiting for display server ($display_type)..."
+        log "Waiting for display server ($display_type)... [${waited}s/${max_wait}s]"
         sleep 2
         waited=$((waited + 2))
 
@@ -219,52 +246,61 @@ run_command() {
         # Run the command
         log "Starting process (attempt #$((restart_count + 1))): $command"
 
-        # Create a subshell to run the command and capture its PID
+        # Create a process group to manage all child processes
         (
-            # Setup environment and run command
+            # Create new process group and save its PID for cleanup
+            set -m  # Enable job control
+
+            # Setup environment and run command with process group
             if id "pi" &>/dev/null; then
                 if [ "$is_gui_app" = true ]; then
                     # For GUI apps, preserve all display environment variables
-                    exec su pi -c "export DISPLAY='${DISPLAY:-:0}'; \
+                    setsid su pi -c "export DISPLAY='${DISPLAY:-:0}'; \
                         export XAUTHORITY='${XAUTHORITY}'; \
                         export HOME='${HOME}'; \
                         export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
                         export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
                         export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                        $command"
+                        exec $command" &
                 else
-                    exec su pi -c "$command"
+                    setsid su pi -c "exec $command" &
                 fi
             else
                 # Find first non-root user
                 local default_user=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' | head -1)
                 if [ -n "$default_user" ]; then
                     if [ "$is_gui_app" = true ]; then
-                        exec su "$default_user" -c "export DISPLAY='${DISPLAY:-:0}'; \
+                        setsid su "$default_user" -c "export DISPLAY='${DISPLAY:-:0}'; \
                             export XAUTHORITY='${XAUTHORITY}'; \
                             export HOME='${HOME}'; \
                             export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
                             export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
                             export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                            $command"
+                            exec $command" &
                     else
-                        exec su "$default_user" -c "$command"
+                        setsid su "$default_user" -c "exec $command" &
                     fi
                 else
                     # Fallback to running as current user
                     if [ "$is_gui_app" = true ]; then
-                        exec bash -c "export DISPLAY='${DISPLAY:-:0}'; \
+                        setsid bash -c "export DISPLAY='${DISPLAY:-:0}'; \
                             export XAUTHORITY='${XAUTHORITY}'; \
                             export HOME='${HOME}'; \
                             export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
                             export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
                             export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                            $command"
+                            exec $command" &
                     else
-                        exec bash -c "$command"
+                        setsid bash -c "exec $command" &
                     fi
                 fi
             fi
+
+            # Get the process group ID
+            local cmd_pid=$!
+            wait $cmd_pid
+            exit $?
+
         ) 2>&1 | while IFS= read -r line; do
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] OUTPUT: $line" >> "$LOG_FILE"
         done &
@@ -299,15 +335,51 @@ run_command() {
     done
 }
 
-# Function to stop the managed process
+# Function to stop the managed process and ALL its children
 stop_process() {
     if [ -f "${PID_FILE}.child" ]; then
         local child_pid=$(cat "${PID_FILE}.child")
-        log "Stopping managed process (PID $child_pid)"
-        kill -TERM $child_pid 2>/dev/null
-        sleep 2
-        kill -KILL $child_pid 2>/dev/null
+        log "Stopping managed process and all children (PID $child_pid)"
+
+        # Kill the entire process group to ensure ALL children die
+        # This handles cases like chromium-browser which spawns multiple processes
+        local pgid
+        if pgid=$(ps -o pgid= -p "$child_pid" 2>/dev/null | tr -d ' '); then
+            if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then
+                log "Killing process group $pgid"
+                # Send TERM signal to entire process group
+                kill -TERM -"$pgid" 2>/dev/null
+                sleep 3
+
+                # Check if any processes in the group are still alive
+                if ps --no-headers -g "$pgid" >/dev/null 2>&1; then
+                    log "Some processes still alive, sending KILL signal"
+                    kill -KILL -"$pgid" 2>/dev/null
+                    sleep 1
+                fi
+            fi
+        fi
+
+        # Also kill the direct child PID as fallback
+        if kill -0 "$child_pid" 2>/dev/null; then
+            log "Killing direct child PID $child_pid"
+            kill -TERM "$child_pid" 2>/dev/null
+            sleep 2
+            kill -KILL "$child_pid" 2>/dev/null
+        fi
+
+        # Extra cleanup for GUI applications (common browser processes)
+        if command -v pkill >/dev/null; then
+            # Kill any lingering browser processes that might have been spawned
+            pkill -f "chromium.*kiosk" 2>/dev/null || true
+            pkill -f "firefox.*kiosk" 2>/dev/null || true
+            pkill -f "chrome.*kiosk" 2>/dev/null || true
+        fi
+
         rm -f "${PID_FILE}.child"
+        log "Process cleanup complete"
+    else
+        log "No child process to stop"
     fi
 }
 
