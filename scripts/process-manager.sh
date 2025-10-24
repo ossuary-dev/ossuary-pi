@@ -246,6 +246,25 @@ run_command() {
         # Run the command
         log "Starting process (attempt #$((restart_count + 1))): $command"
 
+        # Parse out any environment variables from the command
+        local clean_command="$command"
+        local extra_env=""
+
+        # Check if command starts with environment variable assignments
+        # (like DISPLAY=:0 or FOO=bar command)
+        if echo "$command" | grep -qE "^[A-Z_][A-Z0-9_]*="; then
+            # Extract environment variables until we hit the actual command
+            while echo "$clean_command" | grep -qE "^[A-Z_][A-Z0-9_]*="; do
+                # Get the first env var
+                local env_var=$(echo "$clean_command" | sed -E 's/^([A-Z_][A-Z0-9_]*=[^ ]+) .*/\1/')
+                extra_env="$extra_env export $env_var;"
+                # Remove it from the command
+                clean_command=$(echo "$clean_command" | sed -E 's/^[A-Z_][A-Z0-9_]*=[^ ]+ //')
+            done
+            log "Extracted environment: $extra_env"
+            log "Clean command: $clean_command"
+        fi
+
         # Create a process group to manage all child processes
         (
             # Create new process group and save its PID for cleanup
@@ -261,9 +280,10 @@ run_command() {
                         export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
                         export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
                         export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                        exec $command" &
+                        $extra_env \
+                        exec $clean_command" &
                 else
-                    setsid su pi -c "exec $command" &
+                    setsid su pi -c "$extra_env exec $clean_command" &
                 fi
             else
                 # Find first non-root user
@@ -276,9 +296,10 @@ run_command() {
                             export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
                             export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
                             export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                            exec $command" &
+                            $extra_env \
+                            exec $clean_command" &
                     else
-                        setsid su "$default_user" -c "exec $command" &
+                        setsid su "$default_user" -c "$extra_env exec $clean_command" &
                     fi
                 else
                     # Fallback to running as current user
@@ -289,9 +310,10 @@ run_command() {
                             export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
                             export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
                             export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                            exec $command" &
+                            $extra_env \
+                            exec $clean_command" &
                     else
-                        setsid bash -c "exec $command" &
+                        setsid bash -c "$extra_env exec $clean_command" &
                     fi
                 fi
             fi
