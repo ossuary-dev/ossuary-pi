@@ -5,7 +5,7 @@
 
 CONFIG_FILE="/etc/ossuary/config.json"
 LOG_FILE="/var/log/ossuary-process.log"
-PID_FILE="/var/run/ossuary-process.pid"
+PID_FILE="/run/ossuary/process.pid"
 RESTART_DELAY=5
 
 # Ensure log directory exists
@@ -450,6 +450,11 @@ trap handle_hup HUP
 
 # Main execution
 main() {
+    # Ensure runtime directory exists
+    if [ ! -d "/run/ossuary" ]; then
+        mkdir -p /run/ossuary
+    fi
+
     # Check if already running
     if [ -f "$PID_FILE" ]; then
         OLD_PID=$(cat "$PID_FILE")

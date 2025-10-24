@@ -319,8 +319,7 @@ StartLimitIntervalSec=60
 StartLimitBurst=3
 
 [Service]
-Type=forking
-PIDFile=/var/run/ossuary-process.pid
+Type=simple
 ExecStartPre=/bin/bash -c 'until ping -c1 8.8.8.8 &>/dev/null || ping -c1 1.1.1.1 &>/dev/null; do sleep 5; done'
 ExecStart=$INSTALL_DIR/process-manager.sh
 ExecReload=/bin/kill -HUP \$MAINPID
@@ -328,6 +327,8 @@ ExecStop=/bin/kill -TERM \$MAINPID
 Restart=always
 RestartSec=10
 TimeoutStartSec=180
+RuntimeDirectory=ossuary
+RuntimeDirectoryMode=0755
 
 # Logging
 StandardOutput=journal
