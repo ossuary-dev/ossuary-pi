@@ -250,15 +250,26 @@
             </div>
 
             <div class="input-group">
+                <label for="manual-ssid">Or enter network name manually</label>
+                <input type="text" id="manual-ssid" placeholder="Network SSID (if not shown above)" onkeyup="onManualSSIDChange()">
+            </div>
+
+            <div class="input-group">
                 <label for="password">WiFi Password</label>
                 <input type="password" id="password" placeholder="Enter password (leave empty for open networks)">
             </div>
 
             <button onclick="connectWiFi()" id="connect-btn">Connect to Network</button>
+            <button onclick="loadNetworks()" style="margin-top: 10px; background: #6b7280;">Refresh Networks</button>
 
             <div class="info-box">
                 <h3>Connection Status</h3>
                 <p id="status">Scanning for networks...</p>
+            </div>
+
+            <div class="info-box" style="margin-top: 10px;">
+                <h3>Troubleshooting</h3>
+                <p>If networks don't appear, enter your network name manually above. Hidden networks must be entered manually.</p>
             </div>
         </div>
 
@@ -308,36 +319,58 @@
         // Load WiFi networks
         async function loadNetworks() {
             try {
+                console.log('Fetching networks from /networks endpoint...');
                 const response = await fetch('/networks');
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
                 const networks = await response.json();
+                console.log('Networks received:', networks);
 
                 const container = document.getElementById('networks');
                 container.innerHTML = '';
 
-                if (networks.length === 0) {
-                    container.innerHTML = '<p style="color: #666; text-align: center;">No networks found</p>';
+                if (!networks || networks.length === 0) {
+                    container.innerHTML = '<p style="color: #666; text-align: center;">No networks found. Make sure WiFi is enabled.</p>';
+                    document.getElementById('status').textContent = 'No networks detected';
                     return;
                 }
+
+                // Sort networks by signal strength
+                networks.sort((a, b) => (b.signal || 0) - (a.signal || 0));
 
                 networks.forEach(network => {
                     const item = document.createElement('div');
                     item.className = 'network-item';
+
+                    // Handle different possible field names from WiFi Connect
+                    const ssid = network.ssid || network.SSID || 'Unknown';
+                    const signal = network.signal || network.Signal || network.strength || 0;
+                    const encrypted = network.encrypted !== undefined ? network.encrypted :
+                                    network.security !== undefined ? (network.security !== 'Open') : true;
+
                     item.innerHTML = `
                         <div>
-                            <div class="network-name">${network.ssid}</div>
-                            <div class="signal-strength">Signal: ${network.signal || 'Unknown'}%</div>
+                            <div class="network-name">${ssid}</div>
+                            <div class="signal-strength">Signal: ${signal}%</div>
                         </div>
-                        <div>${network.encrypted ? '🔒' : '📡'}</div>
+                        <div>${encrypted ? '🔒' : '📡'}</div>
                     `;
-                    item.onclick = () => selectNetwork(network.ssid, item);
+                    item.onclick = () => selectNetwork(ssid, item);
                     container.appendChild(item);
                 });
 
-                document.getElementById('status').textContent = `Found ${networks.length} networks`;
+                document.getElementById('status').textContent = `Found ${networks.length} network${networks.length !== 1 ? 's' : ''}`;
             } catch (error) {
                 console.error('Error loading networks:', error);
-                document.getElementById('networks').innerHTML = '<p style="color: red;">Error loading networks</p>';
-                document.getElementById('status').textContent = 'Error scanning networks';
+                document.getElementById('networks').innerHTML = `
+                    <p style="color: red; text-align: center;">
+                        Error loading networks<br>
+                        <small>${error.message}</small>
+                    </p>`;
+                document.getElementById('status').textContent = 'Error scanning networks - check console for details';
             }
         }
 
@@ -349,6 +382,23 @@
             element.classList.add('selected');
             selectedNetwork = ssid;
             document.getElementById('connect-btn').textContent = `Connect to ${ssid}`;
+            // Clear manual SSID field when selecting from list
+            document.getElementById('manual-ssid').value = '';
+        }
+
+        // Handle manual SSID entry
+        function onManualSSIDChange() {
+            const manualSSID = document.getElementById('manual-ssid').value.trim();
+            if (manualSSID) {
+                // Clear network selection
+                document.querySelectorAll('.network-item').forEach(item =>
+                    item.classList.remove('selected')
+                );
+                selectedNetwork = manualSSID;
+                document.getElementById('connect-btn').textContent = `Connect to ${manualSSID}`;
+            } else if (!selectedNetwork) {
+                document.getElementById('connect-btn').textContent = 'Connect to Network';
+            }
         }
 
         // Connect to WiFi
@@ -367,13 +417,19 @@
             btn.textContent = 'Connecting...';
 
             try {
+                // WiFi Connect expects JSON format
+                const connectionData = {
+                    ssid: selectedNetwork,
+                    passphrase: document.getElementById('password').value || '',
+                    identity: '' // Optional field for enterprise WiFi
+                };
+
+                console.log('Connecting with data:', connectionData);
+
                 const response = await fetch('/connect', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        ssid: selectedNetwork,
-                        passphrase: document.getElementById('password').value
-                    })
+                    body: JSON.stringify(connectionData)
                 });
 
                 if (response.ok) {
@@ -386,11 +442,18 @@
                         localStorage.setItem('startup_command', startupCmd);
                     }
 
+                    // WiFi Connect will automatically exit and restart networking
                     setTimeout(() => {
-                        document.getElementById('status').textContent = 'If successful, device will be accessible on the network.';
-                    }, 5000);
+                        document.getElementById('status').textContent = 'Device is connecting to WiFi. You may need to reconnect to the network.';
+                        showMessage('If connection is successful, the access point will disappear.', 'success');
+                    }, 3000);
+
+                    setTimeout(() => {
+                        document.getElementById('status').textContent = 'Connection process complete. If the AP is still visible, the connection may have failed.';
+                    }, 10000);
                 } else {
-                    showMessage('Failed to connect. Please check password.', 'error');
+                    const errorText = await response.text();
+                    showMessage('Failed to connect: ' + (errorText || 'Please check password'), 'error');
                     document.getElementById('status').textContent = 'Connection failed';
                 }
             } catch (error) {
