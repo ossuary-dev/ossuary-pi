@@ -84,6 +84,11 @@ if systemctl list-units --full -all | grep -q "ossuary-startup.service"; then
     log "Ossuary startup service stopped"
 fi
 
+if systemctl list-units --full -all | grep -q "ossuary-web.service"; then
+    systemctl stop ossuary-web.service 2>/dev/null || true
+    log "Ossuary web service stopped"
+fi
+
 # Kill any remaining wifi-connect processes
 pkill -f wifi-connect 2>/dev/null || true
 
@@ -92,12 +97,14 @@ log "Disabling services..."
 
 systemctl disable wifi-connect.service 2>/dev/null || true
 systemctl disable ossuary-startup.service 2>/dev/null || true
+systemctl disable ossuary-web.service 2>/dev/null || true
 
 # Step 3: Remove service files
 log "Removing service files..."
 
 rm -f /etc/systemd/system/wifi-connect.service
 rm -f /etc/systemd/system/ossuary-startup.service
+rm -f /etc/systemd/system/ossuary-web.service
 
 # Reload systemd
 systemctl daemon-reload

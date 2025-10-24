@@ -6,9 +6,10 @@ Clean, minimal WiFi failover system for Raspberry Pi using Balena WiFi Connect.
 
 - **Automatic WiFi failover** - Falls back to AP mode when no known network found
 - **Custom captive portal** - Configure WiFi and startup commands
+- **Persistent config page** - Always accessible at http://[hostname] on port 80
 - **Startup command management** - Run any command on boot with network
 - **Based on proven technology** - Uses Balena WiFi Connect (1.4k+ stars, production-tested)
-- **Minimal footprint** - < 200 lines of custom code
+- **Minimal footprint** - < 300 lines of custom code
 
 ## Requirements
 
@@ -44,6 +45,14 @@ sudo reboot
 5. Switch to "Startup Command" tab to configure command
 6. Device will connect and run your command
 
+### Persistent Configuration Access
+
+Once connected to WiFi:
+- Visit http://[hostname] or http://[device-ip] on port 80
+- Configuration page is always available
+- Change startup commands without needing AP mode
+- View connection status and system information
+
 ### Startup Commands
 
 Examples:
@@ -76,13 +85,18 @@ Configuration stored in `/etc/ossuary/config.json`:
 ```
 Balena WiFi Connect (binary)
     ├── Handles WiFi/AP switching
-    ├── Serves custom UI on port 80
+    ├── Serves custom UI during AP mode
     └── Manages NetworkManager
+
+Config Web Server (Python)
+    ├── Runs on port 80 when connected
+    ├── Serves custom UI persistently
+    └── Handles startup command updates
 
 Custom UI (/opt/ossuary/custom-ui/)
     ├── index.html - Portal interface
-    ├── WiFi configuration tab
-    └── Startup command tab
+    ├── WiFi configuration tab (AP mode)
+    └── Startup command tab (always)
 
 Startup Manager (shell script)
     ├── Waits for network
@@ -94,6 +108,7 @@ Startup Manager (shell script)
 
 - WiFi Connect: `journalctl -u wifi-connect`
 - Startup command: `/var/log/ossuary-startup.log`
+- Config server: `journalctl -u ossuary-web`
 - General: `journalctl -u ossuary-startup`
 
 ## Troubleshooting
@@ -108,6 +123,12 @@ sudo journalctl -u wifi-connect -n 50
 ```bash
 cat /var/log/ossuary-startup.log
 sudo systemctl status ossuary-startup
+```
+
+### Config page not accessible
+```bash
+sudo systemctl status ossuary-web
+sudo systemctl restart ossuary-web
 ```
 
 ### Force AP mode for testing

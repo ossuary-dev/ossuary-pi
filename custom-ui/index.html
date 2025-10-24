@@ -403,45 +403,82 @@
             }
         }
 
-        // Load startup command from localStorage or config
+        // Load startup command from config server
         async function loadStartupCommand() {
-            // First check localStorage
-            const savedCmd = localStorage.getItem('startup_command');
-            if (savedCmd) {
-                document.getElementById('startup-cmd').value = savedCmd;
-                return;
-            }
-
-            // Try to load from config file
             try {
-                const response = await fetch('/etc/ossuary/config.json');
+                const response = await fetch('/startup');
                 if (response.ok) {
-                    const config = await response.json();
-                    document.getElementById('startup-cmd').value = config.startup_command || '';
+                    const data = await response.json();
+                    document.getElementById('startup-cmd').value = data.command || '';
                 }
             } catch (error) {
-                // Config doesn't exist yet, that's fine
+                console.log('Could not load startup command:', error);
+                // Try localStorage as fallback
+                const savedCmd = localStorage.getItem('startup_command');
+                if (savedCmd) {
+                    document.getElementById('startup-cmd').value = savedCmd;
+                }
             }
+
+            // Also check system status
+            checkSystemStatus();
         }
 
         // Save startup command
-        function saveStartupCommand() {
+        async function saveStartupCommand() {
             const command = document.getElementById('startup-cmd').value.trim();
 
-            // Save to localStorage
-            localStorage.setItem('startup_command', command);
+            try {
+                const response = await fetch('/startup', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({command: command})
+                });
 
-            // Also save to a form field that can be read by WiFi Connect
-            // We'll write this to a file after connection
-            showMessage('Startup command saved. It will be configured after WiFi connection.', 'success');
+                if (response.ok) {
+                    showMessage('Startup command saved successfully!', 'success');
+                    // Also save to localStorage as backup
+                    localStorage.setItem('startup_command', command);
+                } else {
+                    throw new Error('Failed to save');
+                }
+            } catch (error) {
+                // If server not available, save to localStorage for later
+                localStorage.setItem('startup_command', command);
+                showMessage('Command saved locally. Will be applied after connection.', 'success');
+            }
+        }
 
-            // Create a hidden config that will be processed after connection
-            const config = {
-                startup_command: command,
-                saved_at: new Date().toISOString()
-            };
-
-            localStorage.setItem('ossuary_config', JSON.stringify(config));
+        // Check system status
+        async function checkSystemStatus() {
+            try {
+                const response = await fetch('/status');
+                if (response.ok) {
+                    const status = await response.json();
+                    if (status.wifi_connected) {
+                        // We're connected, show status in startup tab
+                        const statusHtml = `
+                            <div class="info-box" style="margin-bottom: 20px; background: #d4edda; border-color: #28a745;">
+                                <h3 style="color: #155724;">System Status</h3>
+                                <p style="color: #155724;">
+                                    WiFi: Connected to ${status.ssid}<br>
+                                    Hostname: ${status.hostname}<br>
+                                    Access URL: http://${status.hostname}.local or http://[device-ip]
+                                </p>
+                            </div>
+                        `;
+                        const startupTab = document.getElementById('startup-tab');
+                        if (startupTab && !document.getElementById('system-status')) {
+                            const statusDiv = document.createElement('div');
+                            statusDiv.id = 'system-status';
+                            statusDiv.innerHTML = statusHtml;
+                            startupTab.insertBefore(statusDiv, startupTab.firstChild);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.log('Could not check system status:', error);
+            }
         }
 
         // Initialize
@@ -451,6 +488,9 @@
 
             // Refresh networks every 10 seconds
             setInterval(loadNetworks, 10000);
+
+            // Check system status periodically
+            setInterval(checkSystemStatus, 5000);
         };
     </script>
 </body>

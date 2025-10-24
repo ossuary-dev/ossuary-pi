@@ -2,9 +2,13 @@
 
 # Ossuary Startup Manager
 # Runs user-configured startup command after network connection
+# Compatible with Pi OS Bookworm/Trixie (systemd 252+)
 
 CONFIG_FILE="/etc/ossuary/config.json"
 LOG_FILE="/var/log/ossuary-startup.log"
+
+# Ensure log directory exists
+mkdir -p "$(dirname "$LOG_FILE")"
 
 # Function to log messages
 log() {
