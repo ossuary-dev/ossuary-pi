@@ -265,74 +265,75 @@ run_command() {
             log "Clean command: $clean_command"
         fi
 
-        # Create a process group to manage all child processes
-        (
-            # Create new process group and save its PID for cleanup
-            set -m  # Enable job control
+        # Create a wrapper script to run the command and capture its PID
+        local wrapper_script="/tmp/ossuary-wrapper-$$.sh"
+        cat > "$wrapper_script" << WRAPPER_EOF
+#!/bin/bash
+# Write the actual command PID to a file
+PID_FILE="${PID_FILE}.actual"
 
-            # Setup environment and run command with process group
-            if id "pi" &>/dev/null; then
-                if [ "$is_gui_app" = true ]; then
-                    # For GUI apps, preserve all display environment variables
-                    setsid su pi -c "export DISPLAY='${DISPLAY:-:0}'; \
-                        export XAUTHORITY='${XAUTHORITY}'; \
-                        export HOME='${HOME}'; \
-                        export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
-                        export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
-                        export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                        $extra_env \
-                        exec $clean_command" &
-                else
-                    setsid su pi -c "$extra_env exec $clean_command" &
-                fi
-            else
-                # Find first non-root user
-                local default_user=$(getent passwd | awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' | head -1)
-                if [ -n "$default_user" ]; then
-                    if [ "$is_gui_app" = true ]; then
-                        setsid su "$default_user" -c "export DISPLAY='${DISPLAY:-:0}'; \
-                            export XAUTHORITY='${XAUTHORITY}'; \
-                            export HOME='${HOME}'; \
-                            export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
-                            export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
-                            export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                            $extra_env \
-                            exec $clean_command" &
-                    else
-                        setsid su "$default_user" -c "$extra_env exec $clean_command" &
-                    fi
-                else
-                    # Fallback to running as current user
-                    if [ "$is_gui_app" = true ]; then
-                        setsid bash -c "export DISPLAY='${DISPLAY:-:0}'; \
-                            export XAUTHORITY='${XAUTHORITY}'; \
-                            export HOME='${HOME}'; \
-                            export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
-                            export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
-                            export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
-                            $extra_env \
-                            exec $clean_command" &
-                    else
-                        setsid bash -c "$extra_env exec $clean_command" &
-                    fi
-                fi
-            fi
+# Run the command and save its PID
+if id "pi" &>/dev/null; then
+    if [ "$is_gui_app" = true ]; then
+        exec su pi -c "export DISPLAY='${DISPLAY:-:0}'; \
+            export XAUTHORITY='${XAUTHORITY}'; \
+            export HOME='${HOME}'; \
+            export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
+            export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
+            export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
+            $extra_env \
+            exec $clean_command"
+    else
+        exec su pi -c "$extra_env exec $clean_command"
+    fi
+else
+    # Find first non-root user
+    default_user=\$(getent passwd | awk -F: '\$3 >= 1000 && \$3 < 65534 {print \$1}' | head -1)
+    if [ -n "\$default_user" ]; then
+        if [ "$is_gui_app" = true ]; then
+            exec su "\$default_user" -c "export DISPLAY='${DISPLAY:-:0}'; \
+                export XAUTHORITY='${XAUTHORITY}'; \
+                export HOME='${HOME}'; \
+                export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
+                export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
+                export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
+                $extra_env \
+                exec $clean_command"
+        else
+            exec su "\$default_user" -c "$extra_env exec $clean_command"
+        fi
+    else
+        # Fallback to running as current user
+        if [ "$is_gui_app" = true ]; then
+            export DISPLAY='${DISPLAY:-:0}'
+            export XAUTHORITY='${XAUTHORITY}'
+            export HOME='${HOME}'
+            export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'
+            export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'
+            export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'
+            eval "$extra_env"
+        fi
+        exec bash -c "$clean_command"
+    fi
+fi
+WRAPPER_EOF
 
-            # Get the process group ID
-            local cmd_pid=$!
-            wait $cmd_pid
-            exit $?
+        chmod +x "$wrapper_script"
 
-        ) 2>&1 | while IFS= read -r line; do
+        # Start the wrapper script in a new session with output capture
+        setsid bash "$wrapper_script" 2>&1 | while IFS= read -r line; do
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] OUTPUT: $line" >> "$LOG_FILE"
         done &
 
         CHILD_PID=$!
         echo $CHILD_PID > "${PID_FILE}.child"
 
-        # Wait for the process to finish
+        # Monitor the pipeline process
         wait $CHILD_PID
         EXIT_CODE=$?
+
+        # Cleanup
+        rm -f "$wrapper_script"
 
         rm -f "${PID_FILE}.child"
 
@@ -359,6 +360,24 @@ run_command() {
 
 # Function to stop the managed process and ALL its children
 stop_process() {
+    local killed_something=false
+
+    # First try to kill using the actual PID if we have it
+    if [ -f "${PID_FILE}.actual" ]; then
+        local actual_pid=$(cat "${PID_FILE}.actual")
+        if kill -0 "$actual_pid" 2>/dev/null; then
+            log "Stopping actual process (PID $actual_pid)"
+            kill -TERM "$actual_pid" 2>/dev/null
+            killed_something=true
+            sleep 2
+            if kill -0 "$actual_pid" 2>/dev/null; then
+                kill -KILL "$actual_pid" 2>/dev/null
+            fi
+        fi
+        rm -f "${PID_FILE}.actual"
+    fi
+
+    # Then handle the wrapper/pipeline process
     if [ -f "${PID_FILE}.child" ]; then
         local child_pid=$(cat "${PID_FILE}.child")
         log "Stopping managed process and all children (PID $child_pid)"
@@ -371,6 +390,7 @@ stop_process() {
                 log "Killing process group $pgid"
                 # Send TERM signal to entire process group
                 kill -TERM -"$pgid" 2>/dev/null
+                killed_something=true
                 sleep 3
 
                 # Check if any processes in the group are still alive
@@ -386,19 +406,24 @@ stop_process() {
         if kill -0 "$child_pid" 2>/dev/null; then
             log "Killing direct child PID $child_pid"
             kill -TERM "$child_pid" 2>/dev/null
+            killed_something=true
             sleep 2
-            kill -KILL "$child_pid" 2>/dev/null
+            if kill -0 "$child_pid" 2>/dev/null; then
+                kill -KILL "$child_pid" 2>/dev/null
+            fi
         fi
 
-        # Extra cleanup for GUI applications (common browser processes)
+        rm -f "${PID_FILE}.child"
+    fi
+
+    # Extra cleanup for GUI applications (common browser processes)
+    if [ "$killed_something" = true ]; then
         if command -v pkill >/dev/null; then
             # Kill any lingering browser processes that might have been spawned
             pkill -f "chromium.*kiosk" 2>/dev/null || true
             pkill -f "firefox.*kiosk" 2>/dev/null || true
             pkill -f "chrome.*kiosk" 2>/dev/null || true
         fi
-
-        rm -f "${PID_FILE}.child"
         log "Process cleanup complete"
     else
         log "No child process to stop"
