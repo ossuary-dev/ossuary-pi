@@ -24,16 +24,16 @@ fi
 
 # Detect architecture
 ARCH=$(uname -m)
-WIFI_CONNECT_VERSION="v4.14.4"
+WIFI_CONNECT_VERSION="v4.11.84"
 DOWNLOAD_URL=""
 
 case "$ARCH" in
-    "aarch64")
-        DOWNLOAD_URL="https://github.com/balena-os/wifi-connect/releases/download/${WIFI_CONNECT_VERSION}/wifi-connect-linux-aarch64.tar.gz"
+    "aarch64"|"arm64")
+        DOWNLOAD_URL="https://github.com/balena-os/wifi-connect/releases/download/${WIFI_CONNECT_VERSION}/wifi-connect-aarch64-unknown-linux-gnu.tar.gz"
         echo "Detected ARM64 (Pi 4/5)"
         ;;
-    "armv7l")
-        DOWNLOAD_URL="https://github.com/balena-os/wifi-connect/releases/download/${WIFI_CONNECT_VERSION}/wifi-connect-linux-armv7hf.tar.gz"
+    "armv7l"|"armhf")
+        DOWNLOAD_URL="https://github.com/balena-os/wifi-connect/releases/download/${WIFI_CONNECT_VERSION}/wifi-connect-armv7-unknown-linux-gnueabihf.tar.gz"
         echo "Detected ARMv7 (Pi 3/Zero 2 W)"
         ;;
     *)

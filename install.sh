@@ -169,10 +169,10 @@ install_wifi_connect() {
     # Detect architecture - Pi 4/5 run 64-bit, older run 32-bit
     ARCH=$(uname -m)
     if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-        WIFI_CONNECT_ARCH="aarch64"
+        WIFI_CONNECT_ARCH="aarch64-unknown-linux-gnu"
         log "Detected 64-bit ARM (Pi 4/5 with 64-bit OS)"
     elif [ "$ARCH" = "armv7l" ] || [ "$ARCH" = "armhf" ]; then
-        WIFI_CONNECT_ARCH="armv7hf"
+        WIFI_CONNECT_ARCH="armv7-unknown-linux-gnueabihf"
         log "Detected 32-bit ARM (Pi 3/Zero 2 W or 32-bit OS)"
     else
         error "Unsupported architecture: $ARCH"
@@ -180,8 +180,8 @@ install_wifi_connect() {
 
     # Download directly from GitHub releases
     log "Downloading WiFi Connect from GitHub releases..."
-    WIFI_CONNECT_VERSION="v4.14.4"  # Latest stable version compatible with Trixie
-    DOWNLOAD_URL="https://github.com/balena-os/wifi-connect/releases/download/${WIFI_CONNECT_VERSION}/wifi-connect-linux-${WIFI_CONNECT_ARCH}.tar.gz"
+    WIFI_CONNECT_VERSION="v4.11.84"  # Latest actual release (as of Oct 2024)
+    DOWNLOAD_URL="https://github.com/balena-os/wifi-connect/releases/download/${WIFI_CONNECT_VERSION}/wifi-connect-${WIFI_CONNECT_ARCH}.tar.gz"
 
     # Show which Pi model we're installing for
     if [ -f /proc/device-tree/model ]; then
