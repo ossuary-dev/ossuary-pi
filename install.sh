@@ -259,6 +259,16 @@ update_components() {
         error "WiFi Connect manager script not found!"
     fi
 
+    if [ -f "$REPO_DIR/scripts/ensure-network-persistence.sh" ]; then
+        cp "$REPO_DIR/scripts/ensure-network-persistence.sh" "$INSTALL_DIR/scripts/"
+        chmod +x "$INSTALL_DIR/scripts/ensure-network-persistence.sh"
+        success "Network persistence script installed"
+
+        # Run it immediately to ensure existing networks are configured
+        log "Configuring network persistence..."
+        "$INSTALL_DIR/scripts/ensure-network-persistence.sh" >> "$LOG_FILE" 2>&1 || true
+    fi
+
     # Use enhanced config server if available, fallback to basic version
     if [ -f "$REPO_DIR/scripts/config-server-enhanced.py" ]; then
         cp "$REPO_DIR/scripts/config-server-enhanced.py" "$INSTALL_DIR/scripts/config-server.py"

@@ -7,7 +7,8 @@
 CONFIG_FILE="/etc/ossuary/config.json"
 LOG_FILE="/var/log/wifi-connect-manager.log"
 CHECK_INTERVAL=30  # Check every 30 seconds
-MAX_WAIT_FOR_NETWORK=120  # Wait up to 2 minutes for network on boot
+MAX_WAIT_FOR_NETWORK=180  # Wait up to 3 minutes for network on boot
+INITIAL_WAIT=15  # Wait 15 seconds before first check to let NetworkManager initialize
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -58,6 +59,63 @@ has_wifi_connection() {
     return 1
 }
 
+# Check if there are saved WiFi networks
+has_saved_networks() {
+    if command -v nmcli >/dev/null; then
+        # List all saved WiFi connections
+        local saved_count=$(nmcli -t -f TYPE,NAME connection show 2>/dev/null | grep -c "^802-11-wireless:")
+        if [ "$saved_count" -gt 0 ]; then
+            log "Found $saved_count saved WiFi network(s)"
+            return 0
+        fi
+    fi
+
+    # Also check wpa_supplicant if NetworkManager isn't available
+    if [ -f /etc/wpa_supplicant/wpa_supplicant.conf ]; then
+        if grep -q "^[[:space:]]*ssid=" /etc/wpa_supplicant/wpa_supplicant.conf 2>/dev/null; then
+            log "Found saved networks in wpa_supplicant.conf"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Try to connect to saved networks
+try_connect_saved_networks() {
+    if command -v nmcli >/dev/null; then
+        log "Attempting to connect to saved networks..."
+
+        # Get list of available WiFi networks
+        nmcli device wifi rescan 2>/dev/null || true
+        sleep 2
+
+        # Try to auto-connect to any saved network
+        nmcli connection up ifname wlan0 2>/dev/null || true
+
+        # Give it time to connect
+        sleep 5
+
+        if has_wifi_connection; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+# Ensure saved networks have autoconnect enabled
+ensure_autoconnect() {
+    if command -v nmcli >/dev/null; then
+        # Enable autoconnect for all WiFi connections
+        for conn in $(nmcli -t -f TYPE,NAME connection show 2>/dev/null | grep "^802-11-wireless:" | cut -d: -f2); do
+            log "Enabling autoconnect for network: $conn"
+            nmcli connection modify "$conn" connection.autoconnect yes 2>/dev/null || true
+            nmcli connection modify "$conn" connection.autoconnect-priority 10 2>/dev/null || true
+        done
+    fi
+}
+
 # Check if WiFi Connect is running
 wifi_connect_running() {
     systemctl is-active --quiet wifi-connect
@@ -88,34 +146,88 @@ stop_wifi_connect() {
 # Wait for network on boot
 wait_for_network_on_boot() {
     local waited=0
-    log "Waiting for network connection on boot..."
 
-    while [ $waited -lt $MAX_WAIT_FOR_NETWORK ]; do
+    # Initial wait for NetworkManager to fully initialize
+    log "Waiting ${INITIAL_WAIT}s for NetworkManager to initialize..."
+    sleep $INITIAL_WAIT
+
+    # Check if there are saved networks
+    if has_saved_networks; then
+        log "Found saved networks, waiting for auto-connection..."
+
+        # Ensure all saved networks have autoconnect enabled
+        ensure_autoconnect
+
+        # Try to explicitly connect to saved networks
+        try_connect_saved_networks
+
+        # Extended wait time for saved networks
+        while [ $waited -lt $MAX_WAIT_FOR_NETWORK ]; do
+            if has_wifi_connection; then
+                log "WiFi connection established after ${waited}s"
+                return 0
+            fi
+
+            # Periodically try to reconnect
+            if [ $((waited % 60)) -eq 0 ] && [ $waited -gt 0 ]; then
+                log "Retrying connection to saved networks..."
+                try_connect_saved_networks
+            fi
+
+            sleep 5
+            waited=$((waited + 5))
+
+            if [ $((waited % 30)) -eq 0 ]; then
+                log "Still waiting for saved network connection... (${waited}s/${MAX_WAIT_FOR_NETWORK}s)"
+            fi
+        done
+
+        log "Could not connect to saved networks after ${MAX_WAIT_FOR_NETWORK}s"
+    else
+        log "No saved networks found, checking for existing connection..."
+
+        # Quick check for any existing connection
         if has_wifi_connection; then
-            log "WiFi connection found after ${waited}s"
+            log "WiFi connection already established"
             return 0
         fi
 
-        sleep 5
-        waited=$((waited + 5))
+        # Short wait in case of temporary network
+        local quick_wait=30
+        while [ $waited -lt $quick_wait ]; do
+            if has_wifi_connection; then
+                log "WiFi connection found after ${waited}s"
+                return 0
+            fi
 
-        if [ $((waited % 30)) -eq 0 ]; then
-            log "Still waiting for network... (${waited}s/${MAX_WAIT_FOR_NETWORK}s)"
-        fi
-    done
+            sleep 5
+            waited=$((waited + 5))
+        done
 
-    log "No network connection after ${MAX_WAIT_FOR_NETWORK}s"
+        log "No saved networks and no connection after ${quick_wait}s"
+    fi
+
     return 1
 }
 
 # Main monitoring loop
 monitor_network() {
     log "Starting WiFi connection monitoring..."
+    local last_network_check=0
+    local network_check_interval=300  # Check saved networks every 5 minutes
 
     while true; do
+        local current_time=$(date +%s)
+
         if has_wifi_connection; then
             # We have WiFi, make sure captive portal is off
             stop_wifi_connect
+
+            # Periodically ensure autoconnect is enabled for saved networks
+            if [ $((current_time - last_network_check)) -gt $network_check_interval ]; then
+                ensure_autoconnect
+                last_network_check=$current_time
+            fi
 
             # Also check if we have internet
             if has_internet; then
@@ -126,8 +238,31 @@ monitor_network() {
                 sleep $((CHECK_INTERVAL / 2))  # Check more frequently
             fi
         else
-            # No WiFi, start captive portal if not already running
+            # No WiFi connection detected
+
+            # First check if we have saved networks and try to connect
+            if has_saved_networks; then
+                log "No connection but saved networks exist, trying to reconnect..."
+                ensure_autoconnect
+                try_connect_saved_networks
+
+                # Give it a moment to connect
+                sleep 10
+
+                # Check again
+                if has_wifi_connection; then
+                    log "Successfully reconnected to saved network"
+                    continue
+                fi
+            fi
+
+            # Still no connection, start captive portal if not already running
             if ! wifi_connect_running; then
+                if has_saved_networks; then
+                    log "Could not connect to saved networks, starting captive portal..."
+                else
+                    log "No saved networks found, starting captive portal..."
+                fi
                 start_wifi_connect
             fi
 
@@ -156,6 +291,12 @@ trap handle_hup HUP
 main() {
     log "===== WiFi Connect Manager Starting ====="
     log "PID: $$"
+
+    # Ensure network persistence is configured
+    if [ -x "/opt/ossuary/scripts/ensure-network-persistence.sh" ]; then
+        log "Running network persistence check..."
+        /opt/ossuary/scripts/ensure-network-persistence.sh
+    fi
 
     # On boot, wait a bit for the network to come up
     wait_for_network_on_boot
