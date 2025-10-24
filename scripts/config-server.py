@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -109,14 +110,40 @@ class ConfigHandler(SimpleHTTPRequestHandler):
                 with open(CONFIG_FILE, 'w') as f:
                     json.dump(config, f, indent=2)
 
-                # Restart startup service to apply changes
-                subprocess.run(['systemctl', 'restart', 'ossuary-startup'], check=False)
+                # Restart startup service to test the command immediately
+                restart_result = subprocess.run(
+                    ['systemctl', 'restart', 'ossuary-startup'],
+                    capture_output=True,
+                    text=True
+                )
+
+                # Check if service started successfully
+                time.sleep(1)
+                status_result = subprocess.run(
+                    ['systemctl', 'is-active', 'ossuary-startup'],
+                    capture_output=True,
+                    text=True
+                )
+
+                # Get recent logs
+                log_result = subprocess.run(
+                    ['journalctl', '-u', 'ossuary-startup', '-n', '10', '--no-pager'],
+                    capture_output=True,
+                    text=True
+                )
+
+                response_data = {
+                    'success': True,
+                    'service_active': status_result.stdout.strip() == 'active',
+                    'restart_output': restart_result.stderr if restart_result.returncode != 0 else '',
+                    'recent_logs': log_result.stdout[-500:] if log_result.stdout else 'No logs available'
+                }
 
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                self.wfile.write(json.dumps({'success': True}).encode())
+                self.wfile.write(json.dumps(response_data).encode())
             except Exception as e:
                 self.send_response(500)
                 self.send_header('Content-type', 'application/json')

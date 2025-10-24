@@ -243,19 +243,23 @@ update_components() {
     fi
 
     # Copy scripts
-    if [ -f "$REPO_DIR/scripts/startup-manager.sh" ]; then
-        cp "$REPO_DIR/scripts/startup-manager.sh" "$INSTALL_DIR/"
-        chmod +x "$INSTALL_DIR/startup-manager.sh"
+    if [ -f "$REPO_DIR/scripts/process-manager.sh" ]; then
+        cp "$REPO_DIR/scripts/process-manager.sh" "$INSTALL_DIR/"
+        chmod +x "$INSTALL_DIR/process-manager.sh"
+        success "Process manager script installed"
+    else
+        error "Process manager script not found!"
     fi
 
-    if [ -f "$REPO_DIR/scripts/config-handler.py" ]; then
-        cp "$REPO_DIR/scripts/config-handler.py" "$INSTALL_DIR/"
-        chmod +x "$INSTALL_DIR/config-handler.py"
-    fi
-
-    if [ -f "$REPO_DIR/scripts/config-server.py" ]; then
+    # Use enhanced config server if available, fallback to basic version
+    if [ -f "$REPO_DIR/scripts/config-server-enhanced.py" ]; then
+        cp "$REPO_DIR/scripts/config-server-enhanced.py" "$INSTALL_DIR/scripts/config-server.py"
+        chmod +x "$INSTALL_DIR/scripts/config-server.py"
+        success "Enhanced config server installed"
+    elif [ -f "$REPO_DIR/scripts/config-server.py" ]; then
         cp "$REPO_DIR/scripts/config-server.py" "$INSTALL_DIR/scripts/"
         chmod +x "$INSTALL_DIR/scripts/config-server.py"
+        success "Basic config server installed"
     fi
 
     success "Scripts updated"
@@ -278,8 +282,7 @@ ExecStart=/usr/local/bin/wifi-connect \\
     --portal-ssid "Ossuary-Setup" \\
     --ui-directory $CUSTOM_UI_DIR \\
     --activity-timeout 600 \\
-    --portal-listening-port 80 \\
-    --gateway-interface wlan0
+    --portal-listening-port 80
 Restart=on-failure
 RestartSec=10
 Environment="DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket"
@@ -288,23 +291,28 @@ Environment="DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket"
 WantedBy=multi-user.target
 EOF
 
-    # Startup service
+    # Process manager service (keeps command running)
     cat > /etc/systemd/system/ossuary-startup.service << EOF
 [Unit]
-Description=Ossuary Startup Command Manager
-After=network-online.target wifi-connect.service
+Description=Ossuary Process Manager - Keeps User Command Running
+After=network-online.target graphical.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStartPre=/usr/bin/python3 $INSTALL_DIR/config-handler.py
-ExecStart=$INSTALL_DIR/startup-manager.sh
+Type=forking
+PIDFile=/var/run/ossuary-process.pid
+ExecStart=$INSTALL_DIR/process-manager.sh
+ExecReload=/bin/kill -HUP \$MAINPID
+ExecStop=/bin/kill -TERM \$MAINPID
+Restart=always
+RestartSec=10
+
+# Logging
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
 EOF
 
     # Web configuration service (port 8080 to avoid conflict with WiFi Connect)
@@ -715,10 +723,51 @@ main() {
 
                 echo ""
                 echo "Access points:"
-                echo "  • Config page: http://$(hostname) or http://$(hostname -I | awk '{print $1}')"
+                echo "  • Config page: http://$(hostname):8080 or http://$(hostname -I | awk '{print $1}'):8080"
                 echo "  • If no WiFi: Look for 'Ossuary-Setup' network"
                 echo ""
-                echo "No reboot required."
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${BLUE}         USEFUL COMMANDS TO REMEMBER              ${NC}"
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo ""
+                echo "📊 Check Status:"
+                echo "  sudo systemctl status wifi-connect      # WiFi/AP service"
+                echo "  sudo systemctl status ossuary-web       # Config web server"
+                echo "  sudo systemctl status ossuary-startup   # Startup command service"
+                echo "  ./check-status.sh                       # Overall system status"
+                echo ""
+                echo "📝 View Logs:"
+                echo "  journalctl -u wifi-connect -f          # WiFi Connect logs (live)"
+                echo "  journalctl -u ossuary-web -f           # Web server logs (live)"
+                echo "  journalctl -u ossuary-startup          # Startup command logs"
+                echo "  cat /var/log/ossuary-startup.log       # Startup command output"
+                echo ""
+                echo "🔧 Manage Services:"
+                echo "  sudo systemctl restart wifi-connect    # Restart WiFi/AP service"
+                echo "  sudo systemctl restart ossuary-web     # Restart config server"
+                echo "  sudo systemctl stop wifi-connect       # Stop WiFi service"
+                echo "  sudo systemctl start wifi-connect      # Start WiFi service"
+                echo ""
+                echo "🌐 Network Commands:"
+                echo "  nmcli device wifi list                 # List WiFi networks"
+                echo "  nmcli device status                    # Show network status"
+                echo "  iwgetid                                # Show current WiFi SSID"
+                echo "  hostname -I                            # Show IP address"
+                echo ""
+                echo "🔄 Force AP Mode (for testing):"
+                echo "  sudo nmcli device disconnect wlan0     # Disconnect WiFi"
+                echo "  sudo systemctl restart wifi-connect    # Restart to trigger AP"
+                echo ""
+                echo "📁 Configuration:"
+                echo "  cat /etc/ossuary/config.json          # View config file"
+                echo "  nano /etc/ossuary/config.json         # Edit config manually"
+                echo ""
+                echo "🗑️  Uninstall:"
+                echo "  sudo ./uninstall.sh                   # Remove Ossuary"
+                echo ""
+                echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo ""
+                echo "No reboot required - services are running!"
             fi
         fi
     else
@@ -742,7 +791,26 @@ main() {
             echo ""
             echo "After reboot:"
             echo "  • If no WiFi: Look for 'Ossuary-Setup' network"
-            echo "  • If connected: Access config at http://$(hostname)"
+            echo "  • If connected: Access config at http://$(hostname):8080"
+            echo ""
+            echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "${BLUE}         COMMANDS REFERENCE (SAVE THIS!)          ${NC}"
+            echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo ""
+            echo "After reboot, use these commands:"
+            echo ""
+            echo "Check if services are running:"
+            echo "  sudo systemctl status wifi-connect ossuary-web"
+            echo ""
+            echo "View logs if something's wrong:"
+            echo "  sudo journalctl -u wifi-connect -n 50"
+            echo "  sudo journalctl -u ossuary-web -n 50"
+            echo ""
+            echo "Force AP mode for testing:"
+            echo "  sudo nmcli device disconnect wlan0"
+            echo "  sudo systemctl restart wifi-connect"
+            echo ""
+            echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo ""
             echo -e "${BLUE}Thank you for using Ossuary Pi!${NC}"
         fi
