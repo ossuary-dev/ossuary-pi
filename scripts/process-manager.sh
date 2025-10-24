@@ -443,15 +443,24 @@ main() {
     log "PID: $$"
     log "==================================="
 
-    # Wait for network if needed
+    # Wait for network if needed (extended timeout for boot scenarios)
     log "Waiting for network connectivity..."
-    for i in {1..30}; do
-        if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1; then
-            log "Network is up"
+    local network_found=false
+    for i in {1..60}; do
+        if ping -c 1 -W 2 8.8.8.8 >/dev/null 2>&1 || ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
+            log "Network is up after $((i*2)) seconds"
+            network_found=true
             break
+        fi
+        if [ $((i % 10)) -eq 0 ]; then
+            log "Still waiting for network... ($((i*2))s/120s)"
         fi
         sleep 2
     done
+
+    if [ "$network_found" = false ]; then
+        log "WARNING: Network not available after 120 seconds, proceeding anyway"
+    fi
 
     # Add startup delay for system stabilization (important for GUI apps)
     log "Waiting 10 seconds for system to stabilize..."

@@ -313,17 +313,21 @@ EOF
     cat > /etc/systemd/system/ossuary-startup.service << EOF
 [Unit]
 Description=Ossuary Process Manager - Keeps User Command Running
-After=network-online.target graphical.target
+After=network-online.target multi-user.target NetworkManager.service
 Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=forking
 PIDFile=/var/run/ossuary-process.pid
+ExecStartPre=/bin/bash -c 'until ping -c1 8.8.8.8 &>/dev/null || ping -c1 1.1.1.1 &>/dev/null; do sleep 5; done'
 ExecStart=$INSTALL_DIR/process-manager.sh
 ExecReload=/bin/kill -HUP \$MAINPID
 ExecStop=/bin/kill -TERM \$MAINPID
 Restart=always
 RestartSec=10
+TimeoutStartSec=180
 
 # Logging
 StandardOutput=journal
