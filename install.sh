@@ -2,8 +2,20 @@
 
 # Ossuary Pi - Installation, Update, and Repair Script
 # Handles fresh installs, updates existing installations, and repairs broken components
+# Run with DEBUG=1 for verbose output: DEBUG=1 sudo ./install.sh
 
-set -e
+# Don't exit on error - handle errors explicitly
+set +e
+
+# Trap errors and log them
+trap 'catch_error $? $LINENO' ERR
+
+catch_error() {
+    local exit_code=$1
+    local line_no=$2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: Command failed with exit code $exit_code at line $line_no" >> "$LOG_FILE"
+    echo -e "${RED}[ERROR]${NC} Command failed at line $line_no (see $LOG_FILE for details)" >&2
+}
 
 # Configuration
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,7 +34,16 @@ NC='\033[0m'
 # Helper functions
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
-    echo -e "${GREEN}[INFO]${NC} $1"
+    if [ "${DEBUG:-0}" = "1" ] || [ -t 1 ]; then
+        echo -e "${GREEN}[INFO]${NC} $1"
+    fi
+}
+
+debug() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] DEBUG: $1" >> "$LOG_FILE"
+    if [ "${DEBUG:-0}" = "1" ]; then
+        echo -e "${BLUE}[DEBUG]${NC} $1"
+    fi
 }
 
 error() {
@@ -60,22 +81,38 @@ check_existing_installation() {
     local is_installed=false
     local needs_repair=false
 
+    log "Checking for existing installation..."
+
     if [ -d "$INSTALL_DIR" ]; then
         is_installed=true
-        log "Existing installation detected at $INSTALL_DIR"
+        log "Found installation directory at $INSTALL_DIR"
+    else
+        log "No installation directory found"
     fi
 
-    if systemctl list-units --full -all | grep -q "wifi-connect.service"; then
+    # Check for systemd service
+    if systemctl list-units --full -all 2>/dev/null | grep -q "wifi-connect.service"; then
         is_installed=true
-        log "WiFi Connect service detected"
+        log "WiFi Connect service is registered"
 
         # Check if service is broken
         if ! systemctl is-active --quiet wifi-connect 2>/dev/null; then
-            if journalctl -u wifi-connect -n 1 | grep -q "No such file or directory"; then
+            log "WiFi Connect service is not active, checking for issues..."
+            local journal_output=$(journalctl -u wifi-connect -n 5 2>/dev/null || echo "Could not read journal")
+            echo "$journal_output" >> "$LOG_FILE"
+
+            if echo "$journal_output" | grep -q "No such file or directory"; then
                 needs_repair=true
                 warning "WiFi Connect binary is missing - will reinstall"
+            elif echo "$journal_output" | grep -q "exit-code"; then
+                needs_repair=true
+                warning "WiFi Connect service has errors - will repair"
             fi
+        else
+            log "WiFi Connect service is active and running"
         fi
+    else
+        log "WiFi Connect service not found in systemd"
     fi
 
     if [ "$is_installed" = true ]; then
@@ -155,14 +192,16 @@ install_wifi_connect() {
     cd /tmp
     rm -f wifi-connect.tar.gz wifi-connect  # Clean up any old files
 
-    wget -q --show-progress "$DOWNLOAD_URL" -O wifi-connect.tar.gz >> "$LOG_FILE" 2>&1
-    if [ $? -ne 0 ]; then
-        error "Failed to download WiFi Connect"
+    # Download WiFi Connect
+    log "Downloading from: $DOWNLOAD_URL"
+    if ! wget --progress=bar:force "$DOWNLOAD_URL" -O wifi-connect.tar.gz 2>&1 | tee -a "$LOG_FILE"; then
+        log "Download failed - wget exit code: $?"
+        error "Failed to download WiFi Connect (check network connection)"
     fi
+    log "Download complete"
 
     log "Extracting WiFi Connect..."
-    tar -xzf wifi-connect.tar.gz >> "$LOG_FILE" 2>&1
-    if [ $? -ne 0 ]; then
+    if ! tar -xzf wifi-connect.tar.gz >> "$LOG_FILE" 2>&1; then
         error "Failed to extract WiFi Connect"
     fi
 
@@ -378,9 +417,10 @@ EOF
     systemctl enable ossuary-startup.service >> "$LOG_FILE" 2>&1
     systemctl enable ossuary-web.service >> "$LOG_FILE" 2>&1
 
-    # Restart services
-    systemctl restart wifi-connect || warning "WiFi Connect service failed to start"
-    systemctl restart ossuary-web || warning "Web service failed to start"
+    # Restart services (don't fail if services don't start immediately)
+    log "Restarting services..."
+    systemctl restart wifi-connect 2>/dev/null || warning "WiFi Connect service may need manual start"
+    systemctl restart ossuary-web 2>/dev/null || warning "Web service may need manual start"
 
     # Step 7: Copy uninstall and fix scripts
     cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/" 2>/dev/null || true
@@ -416,7 +456,8 @@ EOF
         warning "$issues component(s) may need attention"
     fi
 
-    return $issues
+    # Return 0 even if there are issues (non-fatal)
+    return 0
 }
 
 # SSH safety wrapper (simplified for updates)
@@ -462,6 +503,13 @@ run_ssh_safe() {
 
 # Main execution
 main() {
+    # Initialize log first thing
+    echo "Installation/Update started at $(date)" > "$LOG_FILE"
+    echo "Script version: $(date -r "$0" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo 'unknown')" >> "$LOG_FILE"
+    echo "Running as: $(whoami)" >> "$LOG_FILE"
+    echo "Current directory: $(pwd)" >> "$LOG_FILE"
+    echo "" >> "$LOG_FILE"
+
     clear
     echo "==========================================="
     echo "    ___                                  "
@@ -476,13 +524,13 @@ main() {
     echo "==========================================="
     echo ""
 
-    # Initialize log
-    echo "Installation/Update started at $(date)" > "$LOG_FILE"
-
     # Check root
+    log "Checking root privileges..."
     if [[ $EUID -ne 0 ]]; then
+        log "ERROR: Not running as root (EUID=$EUID)"
         error "This script must be run as root (use sudo)"
     fi
+    log "Running as root - OK"
 
     # Check Pi OS version
     if [ -f /etc/os-release ]; then
@@ -503,27 +551,37 @@ main() {
     fi
 
     # Check WiFi interface (non-fatal for updates)
-    WIFI_INTERFACE=$(ip link | grep -E '^[0-9]+: wl' | cut -d: -f2 | tr -d ' ' | head -n1)
+    log "Detecting WiFi interface..."
+
+    # Method 1: ip link
+    WIFI_INTERFACE=$(ip link 2>/dev/null | grep -E '^[0-9]+: wl' | cut -d: -f2 | tr -d ' ' | head -n1 || true)
+
     if [ -z "$WIFI_INTERFACE" ]; then
-        # Try alternative detection method
-        WIFI_INTERFACE=$(iw dev | awk '/Interface/ {print $2}' | head -n1)
+        log "Method 1 failed, trying iw dev..."
+        # Method 2: iw dev
+        if command -v iw &>/dev/null; then
+            WIFI_INTERFACE=$(iw dev 2>/dev/null | awk '/Interface/ {print $2}' | head -n1 || true)
+        fi
     fi
 
     if [ -z "$WIFI_INTERFACE" ]; then
-        # Try one more method
-        WIFI_INTERFACE=$(ls /sys/class/net | grep -E '^wl' | head -n1)
+        log "Method 2 failed, checking /sys/class/net..."
+        # Method 3: /sys/class/net
+        WIFI_INTERFACE=$(ls /sys/class/net 2>/dev/null | grep -E '^wl' | head -n1 || true)
     fi
 
     if [ -n "$WIFI_INTERFACE" ]; then
-        log "WiFi interface detected: $WIFI_INTERFACE"
+        success "WiFi interface detected: $WIFI_INTERFACE"
     else
-        warning "Could not detect WiFi interface name"
-        # Don't exit - WiFi Connect will find it
+        warning "Could not detect WiFi interface name (WiFi Connect will auto-detect)"
+        log "WiFi detection methods tried but failed - this is non-fatal"
     fi
 
     # Check existing installation
+    log "Starting installation check..."
     check_existing_installation
     local mode=$?
+    log "Installation mode determined: $mode (0=fresh, 1=update, 2=repair)"
 
     # Handle based on mode
     case $mode in
@@ -597,11 +655,17 @@ main() {
     echo ""
     echo -n "Do you want to continue? (yes/no): "
     read -r response
+    log "User response: $response"
 
     if [ "$response" != "yes" ]; then
+        log "Installation cancelled by user"
         echo "Installation cancelled."
+        echo ""
+        echo "Log file: $LOG_FILE"
         exit 0
     fi
+
+    log "User confirmed - proceeding with installation"
 
     echo ""
 
@@ -613,7 +677,8 @@ main() {
         else
             # Update/repair over SSH - run directly (no reboot)
             perform_installation $mode
-            if [ $? -eq 0 ]; then
+            local result=$?
+            if [ $result -eq 0 ]; then
                 echo ""
                 echo "==========================================="
                 echo -e "${GREEN}    Installation Complete!${NC}"
@@ -632,7 +697,8 @@ main() {
     else
         # Local installation - run directly
         perform_installation $mode
-        if [ $? -eq 0 ]; then
+        local result=$?
+        if [ $result -eq 0 ]; then
             echo ""
             echo "==========================================="
             echo -e "${GREEN}    Installation Complete!${NC}"
@@ -655,6 +721,32 @@ main() {
         fi
     fi
 }
+
+# Quick sanity check before running
+if [ ! -f "$REPO_DIR/install.sh" ]; then
+    echo "Error: Cannot find install.sh in current directory"
+    echo "Please run from the ossuary-pi directory"
+    exit 1
+fi
+
+# Run main function and capture any exit
+log_exit() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo "" >> "$LOG_FILE" 2>/dev/null
+        echo "Script exited with code: $exit_code" >> "$LOG_FILE" 2>/dev/null
+        echo ""
+        echo -e "${RED}Installation failed. Check the log for details:${NC}"
+        echo "  cat $LOG_FILE"
+        echo ""
+        echo "For verbose output, run with: DEBUG=1 sudo ./install.sh"
+    fi
+}
+
+trap log_exit EXIT
+
+# Handle Ctrl+C gracefully
+trap 'echo -e "\n${YELLOW}Installation interrupted by user${NC}"; exit 130' INT
 
 # Run main function
 main "$@"
