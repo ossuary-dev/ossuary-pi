@@ -86,14 +86,40 @@ try_connect_saved_networks() {
     if command -v nmcli >/dev/null; then
         log "Attempting to connect to saved networks..."
 
+        # First ensure WiFi is enabled
+        nmcli radio wifi on 2>/dev/null || true
+        sleep 1
+
         # Get list of available WiFi networks
         nmcli device wifi rescan 2>/dev/null || true
-        sleep 2
+        sleep 3
 
-        # Try to auto-connect to any saved network
-        nmcli connection up ifname wlan0 2>/dev/null || true
+        # Get list of available SSIDs
+        local available_ssids=$(nmcli -t -f SSID device wifi list 2>/dev/null | sort -u)
 
-        # Give it time to connect
+        # Try to connect to each saved network that's available
+        for conn in $(nmcli -t -f TYPE,NAME connection show 2>/dev/null | grep "^802-11-wireless:" | cut -d: -f2); do
+            # Get the SSID for this connection
+            local conn_ssid=$(nmcli -t -f 802-11-wireless.ssid connection show "$conn" 2>/dev/null | cut -d: -f2)
+
+            # Check if this network is available
+            if echo "$available_ssids" | grep -q "^$conn_ssid$"; then
+                log "Attempting to connect to saved network: $conn (SSID: $conn_ssid)"
+                if nmcli connection up "$conn" 2>/dev/null; then
+                    log "Successfully connected to $conn"
+                    sleep 3
+                    if has_wifi_connection; then
+                        return 0
+                    fi
+                else
+                    log "Failed to connect to $conn"
+                fi
+            fi
+        done
+
+        # If no specific connections worked, try auto-connect
+        log "Trying NetworkManager auto-connect..."
+        nmcli device connect wlan0 2>/dev/null || true
         sleep 5
 
         if has_wifi_connection; then
@@ -123,7 +149,19 @@ wifi_connect_running() {
 
 # Start WiFi Connect (captive portal)
 start_wifi_connect() {
+    # Make absolutely sure NetworkManager isn't trying to manage the interface
+    log "Preparing to start captive portal..."
+
+    # Don't start if we're already connected
+    if has_wifi_connection; then
+        log "WiFi connection detected, not starting captive portal"
+        return 1
+    fi
+
     log "No WiFi connection detected, starting captive portal..."
+
+    # Ensure WiFi Connect doesn't conflict with NetworkManager
+    # WiFi Connect will manage the interface when it starts
     systemctl start wifi-connect
 
     if systemctl is-active --quiet wifi-connect; then
@@ -131,6 +169,8 @@ start_wifi_connect() {
         log "Connect to 'Ossuary-Setup' network to configure WiFi"
     else
         log "ERROR: Failed to start WiFi Connect"
+        # If WiFi Connect fails, ensure NetworkManager can take back control
+        nmcli device set wlan0 managed yes 2>/dev/null || true
     fi
 }
 
@@ -140,6 +180,14 @@ stop_wifi_connect() {
         log "WiFi connection restored, stopping captive portal..."
         systemctl stop wifi-connect
         log "Captive portal stopped"
+
+        # Give NetworkManager full control back
+        sleep 1
+        nmcli device set wlan0 managed yes 2>/dev/null || true
+
+        # Trigger a reconnection attempt with saved networks
+        sleep 1
+        nmcli device connect wlan0 2>/dev/null || true
     fi
 }
 
