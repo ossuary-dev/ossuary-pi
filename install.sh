@@ -502,12 +502,23 @@ main() {
         fi
     fi
 
-    # Check WiFi interface
+    # Check WiFi interface (non-fatal for updates)
     WIFI_INTERFACE=$(ip link | grep -E '^[0-9]+: wl' | cut -d: -f2 | tr -d ' ' | head -n1)
     if [ -z "$WIFI_INTERFACE" ]; then
-        error "No WiFi interface found. Is WiFi hardware present?"
-    else
+        # Try alternative detection method
+        WIFI_INTERFACE=$(iw dev | awk '/Interface/ {print $2}' | head -n1)
+    fi
+
+    if [ -z "$WIFI_INTERFACE" ]; then
+        # Try one more method
+        WIFI_INTERFACE=$(ls /sys/class/net | grep -E '^wl' | head -n1)
+    fi
+
+    if [ -n "$WIFI_INTERFACE" ]; then
         log "WiFi interface detected: $WIFI_INTERFACE"
+    else
+        warning "Could not detect WiFi interface name"
+        # Don't exit - WiFi Connect will find it
     fi
 
     # Check existing installation
