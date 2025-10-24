@@ -278,7 +278,8 @@ ExecStart=/usr/local/bin/wifi-connect \\
     --portal-ssid "Ossuary-Setup" \\
     --ui-directory $CUSTOM_UI_DIR \\
     --activity-timeout 600 \\
-    --portal-listening-port 80
+    --portal-listening-port 80 \\
+    --gateway-interface wlan0
 Restart=on-failure
 RestartSec=10
 Environment="DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket"
@@ -306,7 +307,7 @@ StandardError=journal
 WantedBy=multi-user.target
 EOF
 
-    # Web configuration service
+    # Web configuration service (port 8080 to avoid conflict with WiFi Connect)
     cat > /etc/systemd/system/ossuary-web.service << EOF
 [Unit]
 Description=Ossuary Web Configuration Interface
@@ -315,14 +316,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/config-server.py
+ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/config-server.py --port 8080
 Restart=always
 RestartSec=10
 User=root
 WorkingDirectory=$INSTALL_DIR
-
-# Allow binding to port 80
-AmbientCapabilities=CAP_NET_BIND_SERVICE
 
 # Logging
 StandardOutput=journal
@@ -418,9 +416,20 @@ EOF
     systemctl enable ossuary-web.service >> "$LOG_FILE" 2>&1
 
     # Restart services (don't fail if services don't start immediately)
-    log "Restarting services..."
+    log "Starting all services..."
+
+    # Start WiFi Connect (handles AP mode and captive portal)
+    log "Starting WiFi Connect service..."
     systemctl restart wifi-connect 2>/dev/null || warning "WiFi Connect service may need manual start"
+    sleep 2  # Give it time to start
+
+    # Start web configuration server (always available on port 80)
+    log "Starting web configuration service..."
     systemctl restart ossuary-web 2>/dev/null || warning "Web service may need manual start"
+
+    # Start startup command service (runs user's command at boot)
+    log "Starting startup command service..."
+    systemctl restart ossuary-startup 2>/dev/null || true  # This is oneshot, might not stay "active"
 
     # Step 7: Copy uninstall and fix scripts
     cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/" 2>/dev/null || true
@@ -690,8 +699,33 @@ main() {
                     echo "Repair completed successfully."
                 fi
                 echo ""
-                echo "Services are running. No reboot required."
-                echo "Access configuration at: http://$(hostname)"
+                echo "Services status:"
+
+                # Check each service
+                if systemctl is-active --quiet wifi-connect; then
+                    echo -e "  ${GREEN}✓${NC} WiFi Connect (captive portal) - Running"
+                else
+                    echo -e "  ${RED}✗${NC} WiFi Connect - Not running (run: sudo systemctl start wifi-connect)"
+                fi
+
+                if systemctl is-active --quiet ossuary-web; then
+                    echo -e "  ${GREEN}✓${NC} Web config server - Running on port 80"
+                else
+                    echo -e "  ${RED}✗${NC} Web config server - Not running (run: sudo systemctl start ossuary-web)"
+                fi
+
+                if [ -f "$CONFIG_DIR/config.json" ]; then
+                    echo -e "  ${GREEN}✓${NC} Configuration file exists"
+                else
+                    echo -e "  ${YELLOW}⚠${NC} No configuration file yet"
+                fi
+
+                echo ""
+                echo "Access points:"
+                echo "  • Config page: http://$(hostname) or http://$(hostname -I | awk '{print $1}')"
+                echo "  • If no WiFi: Look for 'Ossuary-Setup' network"
+                echo ""
+                echo "No reboot required."
             fi
         fi
     else

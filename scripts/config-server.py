@@ -136,9 +136,19 @@ class ConfigHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
 def run_server():
-    server_address = ('', 80)
+    # Check for port argument
+    port = 8080  # Default port to avoid conflict with WiFi Connect
+    if len(sys.argv) > 1:
+        for arg in sys.argv[1:]:
+            if arg.startswith('--port'):
+                if '=' in arg:
+                    port = int(arg.split('=')[1])
+                else:
+                    port = int(sys.argv[sys.argv.index(arg) + 1])
+
+    server_address = ('', port)
     httpd = HTTPServer(server_address, ConfigHandler)
-    print(f"Config server running on port 80...")
+    print(f"Config server running on port {port}...")
     httpd.serve_forever()
 
 if __name__ == '__main__':
