@@ -198,7 +198,7 @@ class ConfigHandler(SimpleHTTPRequestHandler):
         """Get service status"""
         try:
             services = {}
-            for service in ['wifi-connect', 'ossuary-startup', 'ossuary-web']:
+            for service in ['wifi-connect', 'wifi-connect-manager', 'ossuary-startup', 'ossuary-web']:
                 result = subprocess.run(
                     ['systemctl', 'is-active', service],
                     capture_output=True, text=True, timeout=2
@@ -217,7 +217,7 @@ class ConfigHandler(SimpleHTTPRequestHandler):
             action = data.get('action')
 
             # Validate service name
-            if service not in ['wifi-connect', 'ossuary-startup', 'ossuary-web']:
+            if service not in ['wifi-connect', 'wifi-connect-manager', 'ossuary-startup', 'ossuary-web']:
                 self.send_json_response({'error': 'Invalid service'}, 400)
                 return
 

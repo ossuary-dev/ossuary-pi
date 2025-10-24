@@ -358,7 +358,10 @@
                         </div>
                         <div>${encrypted ? '🔒' : '📡'}</div>
                     `;
-                    item.onclick = () => selectNetwork(ssid, item);
+                    item.onclick = () => {
+                        selectNetwork(ssid, item);
+                        console.log('Selected network:', ssid);
+                    };
                     container.appendChild(item);
                 });
 
@@ -403,10 +406,16 @@
 
         // Connect to WiFi
         async function connectWiFi() {
-            if (!selectedNetwork) {
-                showMessage('Please select a network first', 'error');
+            // Check for selected network or manual SSID entry
+            const manualSSID = document.getElementById('manual-ssid').value.trim();
+            const networkToConnect = selectedNetwork || manualSSID;
+
+            if (!networkToConnect) {
+                showMessage('Please select a network or enter SSID manually', 'error');
                 return;
             }
+
+            console.log('Attempting to connect to:', networkToConnect);
 
             if (isConnecting) return;
             isConnecting = true;
@@ -419,7 +428,7 @@
             try {
                 // WiFi Connect expects JSON format
                 const connectionData = {
-                    ssid: selectedNetwork,
+                    ssid: networkToConnect,
                     passphrase: document.getElementById('password').value || '',
                     identity: '' // Optional field for enterprise WiFi
                 };

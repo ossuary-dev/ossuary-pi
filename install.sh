@@ -251,6 +251,14 @@ update_components() {
         error "Process manager script not found!"
     fi
 
+    if [ -f "$REPO_DIR/scripts/wifi-connect-manager.sh" ]; then
+        cp "$REPO_DIR/scripts/wifi-connect-manager.sh" "$INSTALL_DIR/scripts/"
+        chmod +x "$INSTALL_DIR/scripts/wifi-connect-manager.sh"
+        success "WiFi Connect manager script installed"
+    else
+        error "WiFi Connect manager script not found!"
+    fi
+
     # Use enhanced config server if available, fallback to basic version
     if [ -f "$REPO_DIR/scripts/config-server-enhanced.py" ]; then
         cp "$REPO_DIR/scripts/config-server-enhanced.py" "$INSTALL_DIR/scripts/config-server.py"
@@ -269,12 +277,13 @@ update_components() {
 update_services() {
     log "Updating systemd services..."
 
-    # WiFi Connect service
+    # WiFi Connect service - ONLY runs when no WiFi connection
     cat > /etc/systemd/system/wifi-connect.service << EOF
 [Unit]
-Description=Balena WiFi Connect
+Description=Balena WiFi Connect - Captive Portal (only when disconnected)
 After=NetworkManager.service
 Wants=NetworkManager.service
+# Don't start automatically - let wifi-connect-manager decide
 
 [Service]
 Type=simple
@@ -283,12 +292,11 @@ ExecStart=/usr/local/bin/wifi-connect \\
     --ui-directory $CUSTOM_UI_DIR \\
     --activity-timeout 600 \\
     --portal-listening-port 80
-Restart=on-failure
-RestartSec=10
+Restart=no
 Environment="DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket"
 
 [Install]
-WantedBy=multi-user.target
+# Not enabled by default - managed by wifi-connect-manager
 EOF
 
     # Process manager service (keeps command running)
@@ -315,7 +323,29 @@ StandardError=journal
 WantedBy=graphical.target
 EOF
 
-    # Web configuration service (port 8080 to avoid conflict with WiFi Connect)
+    # WiFi Connect Manager - Intelligently manages captive portal
+    cat > /etc/systemd/system/wifi-connect-manager.service << EOF
+[Unit]
+Description=WiFi Connect Manager - Smart Captive Portal Control
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/scripts/wifi-connect-manager.sh
+Restart=always
+RestartSec=10
+User=root
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    # Web configuration service (ALWAYS on port 8080 to avoid conflicts)
     cat > /etc/systemd/system/ossuary-web.service << EOF
 [Unit]
 Description=Ossuary Web Configuration Interface
@@ -412,19 +442,20 @@ EOF
 
     # Step 6: Enable and restart services
     log "Enabling and restarting services..."
-    systemctl enable wifi-connect.service >> "$LOG_FILE" 2>&1
+    # Note: wifi-connect is NOT enabled - managed by wifi-connect-manager
+    systemctl enable wifi-connect-manager.service >> "$LOG_FILE" 2>&1
     systemctl enable ossuary-startup.service >> "$LOG_FILE" 2>&1
     systemctl enable ossuary-web.service >> "$LOG_FILE" 2>&1
 
     # Restart services (don't fail if services don't start immediately)
     log "Starting all services..."
 
-    # Start WiFi Connect (handles AP mode and captive portal)
-    log "Starting WiFi Connect service..."
-    systemctl restart wifi-connect 2>/dev/null || warning "WiFi Connect service may need manual start"
+    # Start WiFi Connect Manager (intelligently manages captive portal)
+    log "Starting WiFi Connect Manager..."
+    systemctl restart wifi-connect-manager 2>/dev/null || warning "WiFi Connect Manager may need manual start"
     sleep 2  # Give it time to start
 
-    # Start web configuration server (always available on port 80)
+    # Start web configuration server (always available on port 8080)
     log "Starting web configuration service..."
     systemctl restart ossuary-web 2>/dev/null || warning "Web service may need manual start"
 
