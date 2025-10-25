@@ -22,12 +22,51 @@
         }
 
         .container {
-            background: rgba(255, 255, 255, 0.95);
-            border-radius: 20px;
-            padding: 40px;
-            max-width: 500px;
+            background: rgba(255, 255, 255, 0.98);
+            border-radius: 24px;
+            padding: 0;
+            max-width: 900px;
             width: 100%;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.15);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 32px 40px;
+            text-align: center;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            margin-bottom: 40px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                max-width: 95%;
+                margin: 10px;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+                gap: 30px;
+            }
+
+            .content {
+                padding: 20px;
+            }
+
+            .header {
+                padding: 24px 20px;
+            }
         }
 
         h1 {
@@ -226,65 +265,275 @@
             font-size: 12px;
             line-height: 1.5;
         }
+
+        .section {
+            background: #fafbff;
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid #e0e7ff;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #334155;
+            margin: 0;
+        }
+
+        .badge {
+            background: #667eea;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge.success {
+            background: #10b981;
+        }
+
+        .badge.warning {
+            background: #f59e0b;
+        }
+
+        .badge.error {
+            background: #ef4444;
+        }
+
+        .network-card {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+
+        .network-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+            transform: translateY(-1px);
+        }
+
+        .network-card.selected {
+            border-color: #667eea;
+            background: #f0f4ff;
+        }
+
+        .network-card.saved {
+            border-left: 4px solid #10b981;
+        }
+
+        .network-card.offline {
+            opacity: 0.6;
+            background: #f8f9fa;
+        }
+
+        .network-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .network-details h4 {
+            margin: 0 0 4px 0;
+            font-size: 16px;
+            color: #1e293b;
+        }
+
+        .network-meta {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: #64748b;
+        }
+
+        .network-status {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 4px;
+        }
+
+        .status-indicator {
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .status-indicator.connected {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status-indicator.available {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .status-indicator.saved {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .status-indicator.offline {
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .form-section {
+            background: white;
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid #e2e8f0;
+        }
+
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            align-items: end;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+            font-size: 14px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f1f5f9;
+            color: #475569;
+        }
+
+        .btn-secondary:hover {
+            background: #e2e8f0;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #64748b;
+        }
+
+        .empty-state h3 {
+            margin: 0 0 8px 0;
+            color: #475569;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>Ossuary Configuration</h1>
-        <p class="subtitle">Configure WiFi and startup commands for your device</p>
-
-        <div class="tab-container">
-            <button class="tab active" onclick="switchTab('wifi')">WiFi Setup</button>
-            <button class="tab" onclick="switchTab('startup')">Startup Command</button>
+        <div class="header">
+            <h1 style="color: white; margin: 0;">Ossuary Configuration</h1>
+            <p style="color: rgba(255,255,255,0.9); margin: 8px 0 0 0; font-size: 16px;">Configure WiFi and startup commands for your device</p>
         </div>
 
-        <div id="message" class="message"></div>
+        <div class="content">
+            <div id="message" class="message"></div>
 
-        <!-- WiFi Tab -->
-        <div id="wifi-tab" class="tab-content active">
-            <div class="input-group">
-                <label>Available Networks</label>
-                <div class="network-list" id="networks">
-                    <div class="spinner show"></div>
+            <div class="grid">
+                <!-- Available Networks Section -->
+                <div class="section">
+                    <div class="section-header">
+                        <h2 class="section-title">Available Networks</h2>
+                        <button onclick="loadNetworks()" class="btn btn-secondary btn-small">Refresh</button>
+                    </div>
+                    <div id="available-networks">
+                        <div class="spinner show"></div>
+                    </div>
+                </div>
+
+                <!-- Saved Networks Section -->
+                <div class="section">
+                    <div class="section-header">
+                        <h2 class="section-title">Saved Networks</h2>
+                        <span class="badge" id="saved-count">0</span>
+                    </div>
+                    <div id="saved-networks">
+                        <div class="empty-state">
+                            <h3>No saved networks</h3>
+                            <p>Networks you connect to will appear here</p>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="input-group">
-                <label for="manual-ssid">Or enter network name manually</label>
-                <input type="text" id="manual-ssid" placeholder="Network SSID (if not shown above)" onkeyup="onManualSSIDChange()">
+            <!-- Connection Form -->
+            <div class="form-section">
+                <h3 style="margin: 0 0 20px 0; color: #334155;">Connect to Network</h3>
+
+                <div class="input-group">
+                    <label for="manual-ssid">Network Name (SSID)</label>
+                    <input type="text" id="manual-ssid" placeholder="Select a network above or enter manually">
+                </div>
+
+                <div class="input-group">
+                    <label for="password">Password</label>
+                    <div style="position: relative;">
+                        <input type="password" id="password" placeholder="Enter password (leave empty for open networks)" style="padding-right: 60px;">
+                        <button type="button" onclick="togglePasswordVisibility()" id="password-toggle" style="position: absolute; right: 8px; top: 50%; transform: translateY(-50%); background: none; border: none; cursor: pointer; font-size: 12px; color: #667eea; padding: 5px; text-decoration: underline;">Show</button>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <button onclick="connectWiFi()" id="connect-btn" class="btn btn-primary" style="width: 100%;">Connect to Network</button>
+                </div>
+
+                <div class="info-box" style="margin-top: 20px;">
+                    <h3>Connection Status</h3>
+                    <p id="status">Scanning for networks...</p>
+                </div>
             </div>
 
-            <div class="input-group">
-                <label for="password">WiFi Password</label>
-                <input type="password" id="password" placeholder="Enter password (leave empty for open networks)">
-            </div>
+            <!-- Startup Command Section -->
+            <div class="form-section" style="margin-top: 30px;">
+                <h3 style="margin: 0 0 20px 0; color: #334155;">Startup Command</h3>
 
-            <button onclick="connectWiFi()" id="connect-btn">Connect to Network</button>
-            <button onclick="loadNetworks()" style="margin-top: 10px; background: #6b7280;">Refresh Networks</button>
+                <div class="input-group">
+                    <label for="startup-cmd">Command</label>
+                    <textarea id="startup-cmd" placeholder="Example: chromium-browser --kiosk https://example.com" style="min-height: 100px;"></textarea>
+                </div>
 
-            <div class="info-box">
-                <h3>Connection Status</h3>
-                <p id="status">Scanning for networks...</p>
-            </div>
+                <div class="form-row">
+                    <button onclick="saveStartupCommand()" class="btn btn-primary" style="width: 100%;">Save Command</button>
+                </div>
 
-            <div class="info-box" style="margin-top: 10px;">
-                <h3>Troubleshooting</h3>
-                <p>If networks don't appear, enter your network name manually above. Hidden networks must be entered manually.</p>
-            </div>
-        </div>
-
-        <!-- Startup Tab -->
-        <div id="startup-tab" class="tab-content">
-            <div class="input-group">
-                <label for="startup-cmd">Startup Command</label>
-                <textarea id="startup-cmd" placeholder="Example: python3 /home/pi/my_script.py"></textarea>
-            </div>
-
-            <button onclick="saveStartupCommand()">Save Startup Command</button>
-
-            <div class="info-box">
-                <h3>About Startup Commands</h3>
-                <p>This command will run automatically when your device boots and has network connectivity. Make sure to use full paths to executables and scripts.</p>
+                <div class="info-box" style="margin-top: 20px;">
+                    <h3>About Startup Commands</h3>
+                    <p>This command runs automatically when your device boots and connects to WiFi. Use full paths to executables and scripts.</p>
+                </div>
             </div>
         </div>
     </div>
@@ -316,7 +565,80 @@
             setTimeout(() => msg.classList.remove('show'), 5000);
         }
 
-        // Load WiFi networks
+        // Toggle password visibility
+        function togglePasswordVisibility() {
+            const passwordInput = document.getElementById('password');
+            const toggleButton = document.getElementById('password-toggle');
+
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                toggleButton.textContent = 'Hide';
+                toggleButton.title = 'Hide password';
+            } else {
+                passwordInput.type = 'password';
+                toggleButton.textContent = 'Show';
+                toggleButton.title = 'Show password';
+            }
+        }
+
+        // Create network card HTML
+        function createNetworkCard(network, isSaved = false, isConnected = false) {
+            const ssid = network.ssid || network.SSID || 'Unknown';
+
+            // Signal strength handling
+            let signal = network.signal || network.Signal || network.strength || network.SignalLevel;
+            let signalDisplay = '';
+
+            if (signal !== undefined && signal !== null && signal !== 0) {
+                if (signal < 0) {
+                    signal = Math.max(0, Math.min(100, ((signal + 90) / 60) * 100));
+                    signal = Math.round(signal);
+                }
+                signalDisplay = `Signal: ${signal}%`;
+            } else {
+                signalDisplay = isSaved ? 'Not in range' : 'Available';
+            }
+
+            // Security type
+            const encrypted = network.encrypted !== undefined ? network.encrypted :
+                            network.security !== undefined ? (network.security !== 'Open') : true;
+
+            let securityInfo = network.security || (encrypted ? 'Secured' : 'Open');
+
+            // Status indicator
+            let statusClass = 'available';
+            let statusText = 'Available';
+
+            if (isConnected) {
+                statusClass = 'connected';
+                statusText = 'Connected';
+            } else if (isSaved && (!signal || signal === 0)) {
+                statusClass = 'offline';
+                statusText = 'Saved';
+            } else if (isSaved) {
+                statusClass = 'saved';
+                statusText = 'Saved';
+            }
+
+            return `
+                <div class="network-card ${isSaved ? 'saved' : ''} ${(!signal || signal === 0) && isSaved ? 'offline' : ''}" onclick="selectNetwork('${ssid}', this)">
+                    <div class="network-info">
+                        <div class="network-details">
+                            <h4>${ssid}</h4>
+                            <div class="network-meta">
+                                <span>${signalDisplay}</span>
+                                <span>${securityInfo}</span>
+                            </div>
+                        </div>
+                        <div class="network-status">
+                            <div class="status-indicator ${statusClass}">${statusText}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Load available WiFi networks
         async function loadNetworks() {
             try {
                 console.log('Fetching networks from /networks endpoint...');
@@ -329,64 +651,117 @@
                 const networks = await response.json();
                 console.log('Networks received:', networks);
 
-                const container = document.getElementById('networks');
+                const container = document.getElementById('available-networks');
                 container.innerHTML = '';
 
                 if (!networks || networks.length === 0) {
-                    container.innerHTML = '<p style="color: #666; text-align: center;">No networks found. Make sure WiFi is enabled.</p>';
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <h3>No networks found</h3>
+                            <p>Make sure WiFi is enabled and try refreshing</p>
+                        </div>
+                    `;
                     document.getElementById('status').textContent = 'No networks detected';
                     return;
                 }
 
-                // Sort networks by signal strength
-                networks.sort((a, b) => (b.signal || 0) - (a.signal || 0));
+                // Sort networks by signal strength if available, otherwise alphabetically
+                networks.sort((a, b) => {
+                    const signalA = a.signal || a.Signal || a.strength || a.SignalLevel || 0;
+                    const signalB = b.signal || b.Signal || b.strength || b.SignalLevel || 0;
+
+                    if (signalA > 0 && signalB > 0) {
+                        return signalB - signalA;
+                    }
+
+                    if (signalA > 0) return -1;
+                    if (signalB > 0) return 1;
+
+                    const ssidA = (a.ssid || a.SSID || '').toLowerCase();
+                    const ssidB = (b.ssid || b.SSID || '').toLowerCase();
+                    return ssidA.localeCompare(ssidB);
+                });
 
                 networks.forEach(network => {
-                    const item = document.createElement('div');
-                    item.className = 'network-item';
-
-                    // Handle different possible field names from WiFi Connect
-                    const ssid = network.ssid || network.SSID || 'Unknown';
-                    const signal = network.signal || network.Signal || network.strength || 0;
-                    const encrypted = network.encrypted !== undefined ? network.encrypted :
-                                    network.security !== undefined ? (network.security !== 'Open') : true;
-
-                    item.innerHTML = `
-                        <div>
-                            <div class="network-name">${ssid}</div>
-                            <div class="signal-strength">Signal: ${signal}%</div>
-                        </div>
-                        <div>${encrypted ? '🔒' : '📡'}</div>
-                    `;
-                    item.onclick = () => {
-                        selectNetwork(ssid, item);
-                        console.log('Selected network:', ssid);
-                    };
-                    container.appendChild(item);
+                    container.innerHTML += createNetworkCard(network);
                 });
 
                 document.getElementById('status').textContent = `Found ${networks.length} network${networks.length !== 1 ? 's' : ''}`;
+
+                // Also load saved networks
+                loadSavedNetworks();
             } catch (error) {
                 console.error('Error loading networks:', error);
-                document.getElementById('networks').innerHTML = `
-                    <p style="color: red; text-align: center;">
-                        Error loading networks<br>
-                        <small>${error.message}</small>
-                    </p>`;
-                document.getElementById('status').textContent = 'Error scanning networks - check console for details';
+                document.getElementById('available-networks').innerHTML = `
+                    <div class="empty-state">
+                        <h3 style="color: #ef4444;">Error loading networks</h3>
+                        <p>${error.message}</p>
+                    </div>
+                `;
+                document.getElementById('status').textContent = 'Error scanning networks';
+            }
+        }
+
+        // Load saved networks
+        async function loadSavedNetworks() {
+            try {
+                // Try to get saved networks from NetworkManager
+                const response = await fetch('/saved-networks');
+                let savedNetworks = [];
+
+                if (response.ok) {
+                    savedNetworks = await response.json();
+                } else {
+                    // Fallback: check localStorage for networks we've connected to
+                    const saved = localStorage.getItem('connected_networks');
+                    if (saved) {
+                        savedNetworks = JSON.parse(saved);
+                    }
+                }
+
+                const container = document.getElementById('saved-networks');
+                const countBadge = document.getElementById('saved-count');
+
+                if (!savedNetworks || savedNetworks.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <h3>No saved networks</h3>
+                            <p>Networks you connect to will appear here</p>
+                        </div>
+                    `;
+                    countBadge.textContent = '0';
+                    return;
+                }
+
+                countBadge.textContent = savedNetworks.length;
+                container.innerHTML = '';
+
+                savedNetworks.forEach(network => {
+                    container.innerHTML += createNetworkCard(network, true);
+                });
+
+            } catch (error) {
+                console.log('Could not load saved networks:', error);
+                // Show empty state on error
+                document.getElementById('saved-networks').innerHTML = `
+                    <div class="empty-state">
+                        <h3>No saved networks</h3>
+                        <p>Networks you connect to will appear here</p>
+                    </div>
+                `;
             }
         }
 
         // Select network
         function selectNetwork(ssid, element) {
-            document.querySelectorAll('.network-item').forEach(item =>
+            document.querySelectorAll('.network-card').forEach(item =>
                 item.classList.remove('selected')
             );
             element.classList.add('selected');
             selectedNetwork = ssid;
             document.getElementById('connect-btn').textContent = `Connect to ${ssid}`;
-            // Clear manual SSID field when selecting from list
-            document.getElementById('manual-ssid').value = '';
+            // Populate manual SSID field with selected network name
+            document.getElementById('manual-ssid').value = ssid;
         }
 
         // Handle manual SSID entry
@@ -394,13 +769,50 @@
             const manualSSID = document.getElementById('manual-ssid').value.trim();
             if (manualSSID) {
                 // Clear network selection
-                document.querySelectorAll('.network-item').forEach(item =>
+                document.querySelectorAll('.network-card').forEach(item =>
                     item.classList.remove('selected')
                 );
                 selectedNetwork = manualSSID;
                 document.getElementById('connect-btn').textContent = `Connect to ${manualSSID}`;
             } else if (!selectedNetwork) {
                 document.getElementById('connect-btn').textContent = 'Connect to Network';
+            }
+        }
+
+        // Save connected network to localStorage
+        function saveConnectedNetwork(ssid) {
+            try {
+                let connectedNetworks = [];
+                const saved = localStorage.getItem('connected_networks');
+                if (saved) {
+                    connectedNetworks = JSON.parse(saved);
+                }
+
+                // Check if network already exists
+                const existingIndex = connectedNetworks.findIndex(net => net.ssid === ssid);
+                if (existingIndex >= 0) {
+                    // Update timestamp for existing network
+                    connectedNetworks[existingIndex].lastConnected = new Date().toISOString();
+                } else {
+                    // Add new network
+                    connectedNetworks.push({
+                        ssid: ssid,
+                        lastConnected: new Date().toISOString(),
+                        saved: true
+                    });
+                }
+
+                // Keep only last 20 connected networks
+                if (connectedNetworks.length > 20) {
+                    connectedNetworks = connectedNetworks
+                        .sort((a, b) => new Date(b.lastConnected) - new Date(a.lastConnected))
+                        .slice(0, 20);
+                }
+
+                localStorage.setItem('connected_networks', JSON.stringify(connectedNetworks));
+                console.log('Saved network to localStorage:', ssid);
+            } catch (error) {
+                console.error('Error saving connected network:', error);
             }
         }
 
@@ -445,6 +857,9 @@
                     showMessage('Connecting to network... Device will restart networking.', 'success');
                     document.getElementById('status').textContent = 'Connection initiated. Please wait...';
 
+                    // Save this network to saved networks list
+                    saveConnectedNetwork(networkToConnect);
+
                     // Save startup command if present
                     const startupCmd = document.getElementById('startup-cmd').value;
                     if (startupCmd) {
@@ -478,14 +893,67 @@
         // Load startup command from config server
         async function loadStartupCommand() {
             try {
-                const response = await fetch('/startup');
-                if (response.ok) {
-                    const data = await response.json();
-                    document.getElementById('startup-cmd').value = data.command || '';
+                // Try multiple possible endpoints for getting the startup command
+                let response;
+                let data = null;
+
+                // First try the config server endpoint
+                try {
+                    response = await fetch('/startup');
+                    if (response.ok) {
+                        data = await response.json();
+                        if (data.command) {
+                            document.getElementById('startup-cmd').value = data.command;
+                            console.log('Loaded startup command from /startup endpoint:', data.command);
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.log('Config server /startup endpoint not available:', e);
+                }
+
+                // Try alternative API endpoint (for enhanced config server)
+                try {
+                    response = await fetch('/api/startup');
+                    if (response.ok) {
+                        data = await response.json();
+                        if (data.command) {
+                            document.getElementById('startup-cmd').value = data.command;
+                            console.log('Loaded startup command from /api/startup endpoint:', data.command);
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.log('Enhanced config server /api/startup endpoint not available:', e);
+                }
+
+                // Try getting from config endpoint
+                try {
+                    response = await fetch('/config');
+                    if (response.ok) {
+                        data = await response.json();
+                        if (data.startup_command) {
+                            document.getElementById('startup-cmd').value = data.startup_command;
+                            console.log('Loaded startup command from /config endpoint:', data.startup_command);
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.log('Config endpoint not available:', e);
+                }
+
+                console.log('Could not load startup command from any server endpoint, trying localStorage');
+                // Fallback to localStorage
+                const savedCmd = localStorage.getItem('startup_command');
+                if (savedCmd) {
+                    document.getElementById('startup-cmd').value = savedCmd;
+                    console.log('Loaded startup command from localStorage:', savedCmd);
+                } else {
+                    console.log('No startup command found in localStorage either');
                 }
             } catch (error) {
-                console.log('Could not load startup command:', error);
-                // Try localStorage as fallback
+                console.log('Error loading startup command:', error);
+                // Try localStorage as final fallback
                 const savedCmd = localStorage.getItem('startup_command');
                 if (savedCmd) {
                     document.getElementById('startup-cmd').value = savedCmd;

@@ -269,38 +269,36 @@ run_command() {
         local wrapper_script="/tmp/ossuary-wrapper-$$.sh"
         cat > "$wrapper_script" << WRAPPER_EOF
 #!/bin/bash
-# Write the actual command PID to a file
-PID_FILE="${PID_FILE}.actual"
-
 # Run the command and save its PID
 if id "pi" &>/dev/null; then
     if [ "$is_gui_app" = true ]; then
-        su pi -c "export DISPLAY='${DISPLAY:-:0}'; \
+        # Use exec to replace the su process with the actual command
+        exec su pi -c "export DISPLAY='${DISPLAY:-:0}'; \
             export XAUTHORITY='${XAUTHORITY}'; \
             export HOME='${HOME}'; \
             export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
             export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
             export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
             $extra_env \
-            $clean_command & echo \\\$! > \$PID_FILE; wait \\\$!"
+            exec $clean_command"
     else
-        su pi -c "$extra_env $clean_command & echo \\\$! > \$PID_FILE; wait \\\$!"
+        exec su pi -c "$extra_env exec $clean_command"
     fi
 else
     # Find first non-root user
     default_user=\$(getent passwd | awk -F: '\$3 >= 1000 && \$3 < 65534 {print \$1}' | head -1)
     if [ -n "\$default_user" ]; then
         if [ "$is_gui_app" = true ]; then
-            su "\$default_user" -c "export DISPLAY='${DISPLAY:-:0}'; \
+            exec su "\$default_user" -c "export DISPLAY='${DISPLAY:-:0}'; \
                 export XAUTHORITY='${XAUTHORITY}'; \
                 export HOME='${HOME}'; \
                 export WAYLAND_DISPLAY='${WAYLAND_DISPLAY}'; \
                 export XDG_RUNTIME_DIR='${XDG_RUNTIME_DIR}'; \
                 export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'; \
                 $extra_env \
-                $clean_command & echo \\\$! > \$PID_FILE; wait \\\$!"
+                exec $clean_command"
         else
-            su "\$default_user" -c "$extra_env $clean_command & echo \\\$! > \$PID_FILE; wait \\\$!"
+            exec su "\$default_user" -c "$extra_env exec $clean_command"
         fi
     else
         # Fallback to running as current user
@@ -313,7 +311,7 @@ else
             export XDG_SESSION_TYPE='${XDG_SESSION_TYPE}'
             eval "$extra_env"
         fi
-        bash -c "$clean_command & echo \$! > \$PID_FILE; wait \$!"
+        exec bash -c "$clean_command"
     fi
 fi
 WRAPPER_EOF
@@ -328,14 +326,28 @@ WRAPPER_EOF
         CHILD_PID=$!
         echo $CHILD_PID > "${PID_FILE}.child"
 
+        # Wait a moment for the process to start, then try to find the actual Chromium PID
+        sleep 2
+
+        # For Chromium/Chrome, find the main browser process (not the wrapper)
+        if echo "$command" | grep -qE "chromium|chrome"; then
+            # Try to find the actual Chromium process that was just started
+            # Look for the newest Chromium process
+            local chromium_pid=$(pgrep -n -f "$clean_command" 2>/dev/null | head -1)
+            if [ -n "$chromium_pid" ]; then
+                echo "$chromium_pid" > "${PID_FILE}.actual"
+                log "Found Chromium PID: $chromium_pid"
+            fi
+        fi
+
         # Monitor the pipeline process
         wait $CHILD_PID
         EXIT_CODE=$?
 
         # Cleanup
         rm -f "$wrapper_script"
-
         rm -f "${PID_FILE}.child"
+        rm -f "${PID_FILE}.actual"
 
         # Log the exit
         if [ $EXIT_CODE -eq 0 ]; then
@@ -472,10 +484,12 @@ trap handle_hup HUP
 
 # Main execution
 main() {
-    # Ensure runtime directory exists
+    # Ensure runtime directory exists and has proper permissions
     if [ ! -d "/run/ossuary" ]; then
         mkdir -p /run/ossuary
     fi
+    # Make sure the directory is writable by all users (for PID file creation)
+    chmod 777 /run/ossuary
 
     # Check if already running
     if [ -f "$PID_FILE" ]; then

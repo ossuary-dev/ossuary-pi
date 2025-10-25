@@ -55,6 +55,8 @@ class ConfigHandler(SimpleHTTPRequestHandler):
                 self.handle_get_startup()
             elif parsed_path.path == '/api/services':
                 self.handle_get_services()
+            elif parsed_path.path == '/api/saved-networks':
+                self.handle_get_saved_networks()
             elif path_parts[0] == 'api' and path_parts[1] == 'logs':
                 if len(path_parts) > 2:
                     self.handle_get_logs(path_parts[2])
@@ -73,6 +75,8 @@ class ConfigHandler(SimpleHTTPRequestHandler):
             self.handle_get_startup()
         elif parsed_path.path == '/status':
             self.handle_status()
+        elif parsed_path.path == '/saved-networks':
+            self.handle_get_saved_networks()
         else:
             # Serve static files
             return SimpleHTTPRequestHandler.do_GET(self)
@@ -206,6 +210,44 @@ class ConfigHandler(SimpleHTTPRequestHandler):
                 services[service] = result.stdout.strip()
 
             self.send_json_response(services)
+        except Exception as e:
+            self.send_json_response({'error': str(e)}, 500)
+
+    def handle_get_saved_networks(self):
+        """Get saved WiFi networks from NetworkManager"""
+        try:
+            saved_networks = []
+
+            # Try to get NetworkManager connection profiles
+            try:
+                result = subprocess.run(
+                    ['nmcli', '-t', '-f', 'NAME,TYPE', 'connection', 'show'],
+                    capture_output=True, text=True, timeout=5
+                )
+
+                if result.returncode == 0:
+                    lines = result.stdout.strip().split('\n')
+                    for line in lines:
+                        if line and ':' in line:
+                            parts = line.split(':')
+                            if len(parts) >= 2 and parts[1] == '802-11-wireless':
+                                network_name = parts[0]
+                                saved_networks.append({
+                                    'ssid': network_name,
+                                    'saved': True,
+                                    'type': 'wifi'
+                                })
+
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception as e:
+                print(f"Error getting NetworkManager connections: {e}")
+
+            # Sort alphabetically
+            saved_networks.sort(key=lambda x: x['ssid'].lower())
+
+            self.send_json_response(saved_networks)
+
         except Exception as e:
             self.send_json_response({'error': str(e)}, 500)
 

@@ -1,168 +1,165 @@
 # Ossuary Pi
 
-Clean, minimal WiFi failover system for Raspberry Pi using Balena WiFi Connect.
+Transforms Raspberry Pi into a kiosk device with WiFi captive portal setup and persistent process management.
 
 ## Features
 
-- **Automatic WiFi failover** - Falls back to AP mode when no known network found
-- **Custom captive portal** - Configure WiFi and startup commands
-- **Persistent config page** - Always accessible at http://[hostname] on port 80
-- **Startup command management** - Run any command on boot with network
-- **Based on proven technology** - Uses Balena WiFi Connect (1.4k+ stars, production-tested)
-- **Minimal footprint** - < 300 lines of custom code
+- WiFi Connect captive portal for network configuration
+- Process manager that keeps user commands running
+- Web configuration interface on port 8080
+- Automatic WiFi management and reconnection
+- Works on Pi OS Bullseye through Trixie (Debian 11-13)
 
 ## Requirements
 
-- Raspberry Pi 4 or 5
-- Raspberry Pi OS (Bookworm or Trixie/2025)
-- Internet connection for installation
+- Raspberry Pi 3/4/5 or Zero 2 W
+- Pi OS Desktop (Bullseye/Bookworm/Trixie)
+- Internet connection for initial setup
 
-## Quick Install
+## Quick Setup
+
+### 1. Flash Pi OS
+
+Use Raspberry Pi Imager to flash Pi OS Desktop. Configure WiFi and SSH in the imager settings.
 
 ```bash
-git clone https://github.com/yourusername/ossuary-pi.git
-cd ossuary-pi
-sudo ./install.sh
-sudo reboot
+# Update system first
+sudo apt update && sudo apt upgrade -y
+sudo raspi-config --expand-rootfs
 ```
 
-## How It Works
+### 2. Install Ossuary Pi
 
-1. **On boot**: WiFi Connect tries to connect to saved networks
-2. **If no network found**: Creates AP "Ossuary-Setup"
-3. **Connect to AP**: Captive portal appears automatically
-4. **Configure**: Select WiFi network and enter startup command
-5. **Reconnect**: Device joins selected network and runs your command
+```bash
+git clone https://github.com/your-repo/ossuary-pi.git
+cd ossuary-pi
+sudo ./install.sh
+```
+
+### 3. Configure Startup Command
+
+Access the configuration page at `http://[pi-ip]:8080` and set your startup command.
+
+Example command for hardware-accelerated web display:
+```bash
+DISPLAY=:0 chromium --kiosk --start-fullscreen --noerrdialogs --disable-infobars --enable-features=Vulkan --enable-unsafe-webgpu --ignore-gpu-blocklist --enable-features=VaapiVideoDecoder,CanvasOopRasterization --password-store=basic https://lumencanvas.studio/projector/proj_j8sfRItFzUOE8ZGlyIE2T/user_33kWBuQgLbKnC84z1dLcCMe2nWY?nb
+```
 
 ## Usage
 
-### First Time Setup
+### WiFi Configuration
 
-1. After installation and reboot, look for "Ossuary-Setup" WiFi network
-2. Connect with any device (no password)
-3. Captive portal opens automatically (or visit http://192.168.4.1)
-4. Select your WiFi network and enter password
-5. Switch to "Startup Command" tab to configure command
-6. Device will connect and run your command
+If WiFi is not configured or connection fails:
+1. Look for "Ossuary-Setup" WiFi network
+2. Connect and browser should open captive portal automatically
+3. If not, navigate to `http://192.168.4.1`
+4. Select network and enter password
 
-### Persistent Configuration Access
+### Configuration Access
 
-Once connected to WiFi:
-- Visit http://[hostname] or http://[device-ip] on port 80
-- Configuration page is always available
-- Change startup commands without needing AP mode
-- View connection status and system information
+When connected to WiFi, access configuration at:
+- `http://[hostname].local:8080`
+- `http://[ip-address]:8080`
 
-### Startup Commands
+### Configuration Interface
 
-Examples:
+The web interface provides:
+- Startup command configuration
+- Process control (start/stop/restart)
+- System status monitoring
+- Service log viewing
+- Test command execution
+
+## Commands
+
+Check service status:
 ```bash
-# Python script
-python3 /home/pi/my_script.py
-
-# Node.js application
-node /home/pi/app/index.js
-
-# Docker container
-docker run -d my-container
-
-# System service
-systemctl start my-service
+sudo systemctl status wifi-connect-manager
+sudo systemctl status ossuary-startup
+sudo systemctl status ossuary-web
 ```
 
-### Configuration
-
-Configuration stored in `/etc/ossuary/config.json`:
-```json
-{
-  "startup_command": "python3 /home/pi/script.py",
-  "wifi_networks": []
-}
+View logs:
+```bash
+sudo journalctl -u wifi-connect-manager -f
+sudo journalctl -u ossuary-startup -f
+sudo journalctl -u ossuary-web -f
 ```
 
-## Architecture
-
+Force captive portal mode:
+```bash
+sudo nmcli device disconnect wlan0
+sudo systemctl restart wifi-connect-manager
 ```
-Balena WiFi Connect (binary)
-    ├── Handles WiFi/AP switching
-    ├── Serves custom UI during AP mode
-    └── Manages NetworkManager
-
-Config Web Server (Python)
-    ├── Runs on port 80 when connected
-    ├── Serves custom UI persistently
-    └── Handles startup command updates
-
-Custom UI (/opt/ossuary/custom-ui/)
-    ├── index.html - Portal interface
-    ├── WiFi configuration tab (AP mode)
-    └── Startup command tab (always)
-
-Startup Manager (shell script)
-    ├── Waits for network
-    ├── Reads config.json
-    └── Executes user command
-```
-
-## Logs
-
-- WiFi Connect: `journalctl -u wifi-connect`
-- Startup command: `/var/log/ossuary-startup.log`
-- Config server: `journalctl -u ossuary-web`
-- General: `journalctl -u ossuary-startup`
 
 ## Troubleshooting
 
-### AP doesn't appear
+### WiFi Issues
+
+If WiFi connection fails:
 ```bash
-sudo systemctl status wifi-connect
-sudo journalctl -u wifi-connect -n 50
+# Stop services blocking connection
+sudo systemctl stop wifi-connect
+sudo systemctl stop wifi-connect-manager
+
+# Restart NetworkManager
+sudo systemctl restart NetworkManager
+
+# Enable WiFi and reconnect
+sudo nmcli radio wifi on
+sudo nmcli device set wlan0 managed yes
+sudo nmcli device wifi rescan
+sudo nmcli device connect wlan0
+
+# Restart WiFi manager
+sudo systemctl start wifi-connect-manager
 ```
 
-### Startup command not running
+### Process Issues
+
+Check if startup command is running:
 ```bash
-cat /var/log/ossuary-startup.log
 sudo systemctl status ossuary-startup
+sudo journalctl -u ossuary-startup -n 20
 ```
 
-### Config page not accessible
-```bash
-sudo systemctl status ossuary-web
-sudo systemctl restart ossuary-web
-```
+### Debug Information
 
-### Force AP mode for testing
+For detailed debugging:
 ```bash
-sudo systemctl stop NetworkManager
-sudo systemctl restart wifi-connect
+./debug-wifi-connect.sh
 ```
 
 ## Uninstall
 
 ```bash
-sudo /opt/ossuary/uninstall.sh
+sudo ./uninstall.sh
 ```
 
-## Why This Approach?
+## File Structure
 
-- **Proven**: WiFi Connect used in thousands of IoT devices
-- **Minimal**: Only ~200 lines of custom code vs 2000+ in old implementation
-- **Reliable**: 95% success rate vs 20% with custom implementation
-- **Maintained**: Leverages actively developed Balena project
-- **Simple**: No Flask server, no submodules, no complex dependencies
+- `install.sh` - Main installation script
+- `uninstall.sh` - Removal script
+- `scripts/process-manager.sh` - Keeps user processes running
+- `scripts/wifi-connect-manager.sh` - Manages captive portal
+- `scripts/config-server-enhanced.py` - Configuration web server
+- `custom-ui/` - Captive portal and configuration interfaces
 
 ## Technical Details
 
-- Uses NetworkManager (standard in modern Pi OS)
-- WiFi Connect handles all network management
-- Custom UI via `--ui-directory` flag
-- Startup command runs as 'pi' user if exists
-- Compatible with Debian Trixie (Pi OS 2025)
+### Services
 
-## Contributing
+- `wifi-connect-manager` - Monitors WiFi and starts captive portal when needed
+- `ossuary-startup` - Runs and monitors user startup command
+- `ossuary-web` - Configuration server on port 8080
 
-Keep it simple. The beauty of this solution is its minimalism.
+### Architecture Support
+
+- ARM64 (Pi 4/5)
+- ARMv7 (Pi 3/Zero 2 W)
+
+Automatically detects architecture and downloads appropriate WiFi Connect binary.
 
 ## License
 
-MIT
+MIT License

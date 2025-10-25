@@ -58,7 +58,7 @@ warning() {
 }
 
 success() {
-    echo -e "${GREEN}✓${NC} $1"
+    echo -e "${GREEN}[OK]${NC} $1"
 }
 
 # Show spinner for long operations
@@ -271,12 +271,10 @@ update_components() {
 
     # Use enhanced config server if available, fallback to basic version
     if [ -f "$REPO_DIR/scripts/config-server-enhanced.py" ]; then
-        cp "$REPO_DIR/scripts/config-server-enhanced.py" "$INSTALL_DIR/scripts/config-server.py"
-        chmod +x "$INSTALL_DIR/scripts/config-server.py"
+        cp "$REPO_DIR/scripts/config-server-enhanced.py" "$INSTALL_DIR/scripts/"
+        chmod +x "$INSTALL_DIR/scripts/config-server-enhanced.py"
         success "Enhanced config server installed"
-    elif [ -f "$REPO_DIR/scripts/config-server.py" ]; then
-        cp "$REPO_DIR/scripts/config-server.py" "$INSTALL_DIR/scripts/"
-        chmod +x "$INSTALL_DIR/scripts/config-server.py"
+    # Fallback removed - only use enhanced version
         success "Basic config server installed"
     fi
 
@@ -369,7 +367,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/config-server.py --port 8080
+ExecStart=/usr/bin/python3 $INSTALL_DIR/scripts/config-server-enhanced.py --port=8080
 Restart=always
 RestartSec=10
 User=root
@@ -482,10 +480,7 @@ EOF
     cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/" 2>/dev/null || true
     chmod +x "$INSTALL_DIR/uninstall.sh" 2>/dev/null || true
 
-    if [ -f "$REPO_DIR/fix-wifi-connect.sh" ]; then
-        cp "$REPO_DIR/fix-wifi-connect.sh" "$INSTALL_DIR/" 2>/dev/null || true
-        chmod +x "$INSTALL_DIR/fix-wifi-connect.sh" 2>/dev/null || true
-    fi
+    # Fix scripts removed - functionality integrated into installer
 
     # Step 8: Verify installation
     log "Verifying installation..."
@@ -750,19 +745,19 @@ main() {
 
                 # Check each service
                 if systemctl is-active --quiet wifi-connect; then
-                    echo -e "  ${GREEN}✓${NC} WiFi Connect (captive portal) - Running"
+                    echo -e "  ${GREEN}[OK]${NC} WiFi Connect (captive portal) - Running"
                 else
-                    echo -e "  ${RED}✗${NC} WiFi Connect - Not running (run: sudo systemctl start wifi-connect)"
+                    echo -e "  ${RED}[FAIL]${NC} WiFi Connect - Not running (run: sudo systemctl start wifi-connect)"
                 fi
 
                 if systemctl is-active --quiet ossuary-web; then
-                    echo -e "  ${GREEN}✓${NC} Web config server - Running on port 80"
+                    echo -e "  ${GREEN}[OK]${NC} Web config server - Running on port 80"
                 else
-                    echo -e "  ${RED}✗${NC} Web config server - Not running (run: sudo systemctl start ossuary-web)"
+                    echo -e "  ${RED}[FAIL]${NC} Web config server - Not running (run: sudo systemctl start ossuary-web)"
                 fi
 
                 if [ -f "$CONFIG_DIR/config.json" ]; then
-                    echo -e "  ${GREEN}✓${NC} Configuration file exists"
+                    echo -e "  ${GREEN}[OK]${NC} Configuration file exists"
                 else
                     echo -e "  ${YELLOW}⚠${NC} No configuration file yet"
                 fi
@@ -776,35 +771,35 @@ main() {
                 echo -e "${BLUE}         USEFUL COMMANDS TO REMEMBER              ${NC}"
                 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
                 echo ""
-                echo "📊 Check Status:"
+                echo "Check Status:"
                 echo "  sudo systemctl status wifi-connect      # WiFi/AP service"
                 echo "  sudo systemctl status ossuary-web       # Config web server"
                 echo "  sudo systemctl status ossuary-startup   # Startup command service"
-                echo "  ./check-status.sh                       # Overall system status"
+                echo "  sudo systemctl status wifi-connect-manager ossuary-startup ossuary-web"
                 echo ""
-                echo "📝 View Logs:"
+                echo "View Logs:"
                 echo "  journalctl -u wifi-connect -f          # WiFi Connect logs (live)"
                 echo "  journalctl -u ossuary-web -f           # Web server logs (live)"
                 echo "  journalctl -u ossuary-startup          # Startup command logs"
                 echo "  cat /var/log/ossuary-startup.log       # Startup command output"
                 echo ""
-                echo "🔧 Manage Services:"
+                echo "Manage Services:"
                 echo "  sudo systemctl restart wifi-connect    # Restart WiFi/AP service"
                 echo "  sudo systemctl restart ossuary-web     # Restart config server"
                 echo "  sudo systemctl stop wifi-connect       # Stop WiFi service"
                 echo "  sudo systemctl start wifi-connect      # Start WiFi service"
                 echo ""
-                echo "🌐 Network Commands:"
+                echo "Network Commands:"
                 echo "  nmcli device wifi list                 # List WiFi networks"
                 echo "  nmcli device status                    # Show network status"
                 echo "  iwgetid                                # Show current WiFi SSID"
                 echo "  hostname -I                            # Show IP address"
                 echo ""
-                echo "🔄 Force AP Mode (for testing):"
+                echo "Force AP Mode (for testing):"
                 echo "  sudo nmcli device disconnect wlan0     # Disconnect WiFi"
                 echo "  sudo systemctl restart wifi-connect    # Restart to trigger AP"
                 echo ""
-                echo "📁 Configuration:"
+                echo "Configuration:"
                 echo "  cat /etc/ossuary/config.json          # View config file"
                 echo "  nano /etc/ossuary/config.json         # Edit config manually"
                 echo ""
